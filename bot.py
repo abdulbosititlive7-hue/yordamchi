@@ -1,196 +1,397 @@
+
 import asyncio
 import logging
 import os
-from datetime import datetime, date, timedelta
-from contextlib import asynccontextmanager
+import re
+from datetime import datetime, timedelta
 
 import aiosqlite
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ChatMemberStatus
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup,
-    InlineKeyboardButton, ReplyKeyboardMarkup,
-    KeyboardButton
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 
 # =========================================================
-# 1. SOZLAMALAR
+# SOZLAMALAR
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "9269203317:AAFCoXtE8EHT9IR5HGhLtFPzG_qkyf6sFDo").strip()
 ADMIN_ID_1 = int(os.getenv("ADMIN_ID_1", "5200398952"))
 ADMIN_ID_2 = int(os.getenv("ADMIN_ID_2", "7676544759"))
-DB_PATH = os.getenv("DB_PATH", "/var/data/bot.sqlite3")
+
+DB_PATH = os.getenv("DB_PATH", "bot.sqlite3")
 PORT = int(os.getenv("PORT", "10000"))
 
+REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD", "2"))
+MIN_WITHDRAW = 15
+MAX_WITHDRAW = 25
+
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN kiritilmagan!")
+    raise RuntimeError("Render Environment da BOT_TOKEN kiritilmagan!")
 
-if ADMIN_ID_1 <= 0 or ADMIN_ID_2 <= 0:
-    raise RuntimeError("Ikkala admin ID ham kiritilishi kerak!")
+if not ADMIN_ID_1:
+    raise RuntimeError("ADMIN_ID_1 kiritilmagan!")
 
-if ADMIN_ID_1 == ADMIN_ID_2:
-    raise RuntimeError("Admin ID lar bir xil bo'lishi mumkin emas!")
+ADMINS = {ADMIN_ID_1}
+if ADMIN_ID_2:
+    ADMINS.add(ADMIN_ID_2)
 
-ADMIN_IDS = {ADMIN_ID_1, ADMIN_ID_2}
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-log = logging.getLogger("telegram-bot")
-
-
-# =========================================================
-# 2. BOT VA DISPATCHER
-# =========================================================
-
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-
-dp = Dispatcher(storage=MemoryStorage())
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
 
 
 # =========================================================
-# 3. FSM HOLATLARI
+# FSM HOLATLARI
 # =========================================================
 
-class PromoState(StatesGroup):
-    enter = State()
-
-
-class SupportState(StatesGroup):
-    message = State()
+class UserState(StatesGroup):
+    waiting_promo = State()
+    waiting_support = State()
 
 
 class AdminState(StatesGroup):
-    add_channel = State()
-    add_promo_code = State()
-    add_promo_amount = State()
-    add_promo_limit = State()
-    search_user = State()
-    balance_user = State()
-    balance_amount = State()
-    broadcast = State()
-    add_task_title = State()
-    add_task_link = State()
-    add_task_reward = State()
-    add_news = State()
-    reply_support = State()
+    waiting_balance = State()
+    waiting_channel = State()
+    waiting_broadcast = State()
+    waiting_promo_create = State()
+    waiting_news = State()
+    waiting_task = State()
+    waiting_reply = State()
 
 
 # =========================================================
-# 4. VAQT VA YORDAMCHI FUNKSIYALAR
+# MA'LUMOTLAR BAZASI
 # =========================================================
 
-def now():
-    return datetime.utcnow().isoformat(timespec="seconds")
+async def db():
+    return await aiosqlite.connect(DB_PATH)
 
 
-def today():
-    return date.today().isoformat()
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.executescript("""
+        CREATE TABLE IF NOT EXISTS users(
+            user_id INTEGER PRIMARY KEY,
+            full_name TEXT,
+            username TEXT,
+            balance INTEGER DEFAULT 0,
+            referrer_id INTEGER,
+            blocked INTEGER DEFAULT 0,
+            joined TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS admins(
+            user_id INTEGER PRIMARY KEY,
+            role TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS channels(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT UNIQUE,
+            invite_link TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS transactions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            reason TEXT,
+            created TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS withdrawals(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            status TEXT DEFAULT 'pending',
+            created TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS promos(
+            code TEXT PRIMARY KEY,
+            reward INTEGER,
+            max_uses INTEGER,
+            used_count INTEGER DEFAULT 0,
+            expires TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS promo_users(
+            code TEXT,
+            user_id INTEGER,
+            PRIMARY KEY(code, user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS daily_claims(
+            user_id INTEGER PRIMARY KEY,
+            last_claim TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS tasks(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            link TEXT,
+            reward INTEGER,
+            active INTEGER DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS task_claims(
+            task_id INTEGER,
+            user_id INTEGER,
+            status TEXT DEFAULT 'pending',
+            PRIMARY KEY(task_id, user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS support(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            message TEXT,
+            created TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS news(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT,
+            created TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            description TEXT,
+            created TEXT
+        );
+        """)
+
+        await con.execute(
+            "INSERT OR IGNORE INTO admins(user_id, role) VALUES(?, 'main')",
+            (ADMIN_ID_1,)
+        )
+
+        if ADMIN_ID_2:
+            await con.execute(
+                "INSERT OR IGNORE INTO admins(user_id, role) VALUES(?, 'admin')",
+                (ADMIN_ID_2,)
+            )
+
+        await con.commit()
 
 
-def is_admin(user_id: int):
-    return user_id in ADMIN_IDS
+async def fetchone(query, args=()):
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute(query, args)
+        return await cur.fetchone()
 
 
-def main_admin(user_id: int):
-    return user_id == ADMIN_ID_1
+async def fetchall(query, args=()):
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute(query, args)
+        return await cur.fetchall()
 
 
-def user_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="👥 Referal"),
-                KeyboardButton(text="💰 Mening hisobim")
-            ],
-            [
-                KeyboardButton(text="⭐ Stars yechish"),
-                KeyboardButton(text="📦 Buyurtmalarim")
-            ],
-            [
-                KeyboardButton(text="🎁 Promokod"),
-                KeyboardButton(text="📅 Kunlik bonus")
-            ],
-            [
-                KeyboardButton(text="📋 Vazifalar"),
-                KeyboardButton(text="🏆 Reyting")
-            ],
-            [
-                KeyboardButton(text="💬 Adminga murojaat"),
-                KeyboardButton(text="📰 Yangiliklar")
-            ],
-            [
-                KeyboardButton(text="📖 Qo‘llanma"),
-                KeyboardButton(text="⚙️ Sozlamalar")
-            ]
-        ],
-        resize_keyboard=True
+async def execute(query, args=()):
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute(query, args)
+        await con.commit()
+
+
+async def add_transaction(user_id, amount, reason):
+    await execute(
+        "INSERT INTO transactions(user_id, amount, reason, created) VALUES(?,?,?,?)",
+        (user_id, amount, reason, datetime.now().isoformat())
     )
 
 
-def admin_keyboard():
+async def change_balance(user_id, amount, reason):
+    user = await fetchone(
+        "SELECT balance FROM users WHERE user_id=?", (user_id,)
+    )
+    if not user:
+        return False
+
+    new_balance = user[0] + amount
+    if new_balance < 0:
+        return False
+
+    await execute(
+        "UPDATE users SET balance=? WHERE user_id=?",
+        (new_balance, user_id)
+    )
+    await add_transaction(user_id, amount, reason)
+    return True
+
+
+# =========================================================
+# UMUMIY FUNKSIYALAR
+# =========================================================
+
+def is_admin(user_id):
+    return user_id in ADMINS
+
+
+def is_main_admin(user_id):
+    return user_id == ADMIN_ID_1
+
+
+def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📊 Statistika", callback_data="a:stats"),
-            InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="a:users")
+            InlineKeyboardButton(text="👥 Referal", callback_data="referral"),
+            InlineKeyboardButton(text="💰 Mening hisobim", callback_data="balance")
         ],
         [
-            InlineKeyboardButton(text="📦 Buyurtmalar", callback_data="a:orders"),
-            InlineKeyboardButton(text="🎁 Promokodlar", callback_data="a:promos")
+            InlineKeyboardButton(text="⭐ Stars yechish", callback_data="withdraw"),
+            InlineKeyboardButton(text="🎁 Promo-kod", callback_data="promo")
         ],
         [
-            InlineKeyboardButton(text="📢 Kanallar", callback_data="a:channels"),
-            InlineKeyboardButton(text="📣 Reklama", callback_data="a:broadcast")
+            InlineKeyboardButton(text="📅 Kunlik bonus", callback_data="daily"),
+            InlineKeyboardButton(text="📋 Topshiriqlar", callback_data="tasks")
         ],
         [
-            InlineKeyboardButton(text="📋 Vazifalar", callback_data="a:tasks"),
-            InlineKeyboardButton(text="💬 Murojaatlar", callback_data="a:support")
+            InlineKeyboardButton(text="🏆 Reyting", callback_data="ranking"),
+            InlineKeyboardButton(text="📰 Yangiliklar", callback_data="news")
         ],
         [
-            InlineKeyboardButton(text="📰 Yangilik joylash", callback_data="a:news"),
-            InlineKeyboardButton(text="📈 Reyting", callback_data="a:rating")
+            InlineKeyboardButton(text="📨 Adminga murojaat", callback_data="support"),
+            InlineKeyboardButton(text="📦 Buyurtmalar", callback_data="orders")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Bonus sozlamalari", callback_data="a:settings")
-        ],
-        [
-            InlineKeyboardButton(text="❌ Yopish", callback_data="a:close")
+            InlineKeyboardButton(text="📖 Qo‘llanma", callback_data="guide"),
+            InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="settings")
         ]
     ])
 
 
-def cancel_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")]
+def admin_menu(user_id):
+    rows = [
+        [
+            InlineKeyboardButton(text="📊 Statistika", callback_data="a_stats"),
+            InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="a_users")
+        ],
+        [
+            InlineKeyboardButton(text="💰 Balans boshqarish", callback_data="a_balance"),
+            InlineKeyboardButton(text="💸 Yechish so‘rovlari", callback_data="a_withdrawals")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Reklama tarqatish", callback_data="a_broadcast"),
+            InlineKeyboardButton(text="📣 Kanallar", callback_data="a_channels")
+        ],
+        [
+            InlineKeyboardButton(text="🎁 Promo yaratish", callback_data="a_promo"),
+            InlineKeyboardButton(text="📋 Topshiriq qo‘shish", callback_data="a_task")
+        ],
+        [
+            InlineKeyboardButton(text="📰 Yangilik yuborish", callback_data="a_news"),
+            InlineKeyboardButton(text="📨 Murojaatlar", callback_data="a_support")
+        ]
+    ]
+
+    if is_main_admin(user_id):
+        rows.append([
+            InlineKeyboardButton(text="⚙️ Admin sozlamalari", callback_data="a_settings")
+        ])
+
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Foydalanuvchi paneli", callback_data="back_home")
     ])
 
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def subscription_keyboard(channels):
+
+async def user_exists(user_id):
+    return await fetchone(
+        "SELECT user_id FROM users WHERE user_id=?", (user_id,)
+    )
+
+
+async def register_user(message: Message, referrer_id=None):
+    user_id = message.from_user.id
+    old = await user_exists(user_id)
+
+    if old:
+        await execute(
+            "UPDATE users SET full_name=?, username=? WHERE user_id=?",
+            (
+                message.from_user.full_name,
+                message.from_user.username or "",
+                user_id
+            )
+        )
+        return False
+
+    if referrer_id == user_id:
+        referrer_id = None
+
+    if referrer_id and not await user_exists(referrer_id):
+        referrer_id = None
+
+    await execute("""
+        INSERT INTO users(user_id, full_name, username, balance,
+                          referrer_id, joined)
+        VALUES(?,?,?,?,?,?)
+    """, (
+        user_id,
+        message.from_user.full_name,
+        message.from_user.username or "",
+        0,
+        referrer_id,
+        datetime.now().isoformat()
+    ))
+
+    if referrer_id:
+        await change_balance(
+            referrer_id, REFERRAL_REWARD, "Referal mukofoti"
+        )
+        try:
+            await bot.send_message(
+                referrer_id,
+                f"🎉 Yangi foydalanuvchi taklifingiz orqali kirdi!\n"
+                f"Hisobingizga {REFERRAL_REWARD} Stars qo‘shildi."
+            )
+        except Exception:
+            pass
+
+    return True
+
+
+async def check_subscription(user_id):
+    channels = await fetchall("SELECT chat_id FROM channels")
+    missing = []
+
+    for (chat_id,) in channels:
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            if member.status in ("left", "kicked"):
+                missing.append(chat_id)
+        except Exception:
+            missing.append(chat_id)
+
+    return missing
+
+
+async def subscription_keyboard(missing):
     rows = []
-    for channel in channels:
-        link = channel["invite_link"]
-        if link:
-            rows.append([
-                InlineKeyboardButton(
-                    text=f"➕ {channel['title']}",
-                    url=link
-                )
-            ])
+    for channel in missing:
+        link = channel
+        if str(channel).startswith("@"):
+            link = "https://t.me/" + str(channel)[1:]
+
+        rows.append([
+            InlineKeyboardButton(
+                text=f"➕ {channel} kanaliga obuna bo‘lish",
+                url=link
+            )
+        ])
 
     rows.append([
         InlineKeyboardButton(
@@ -198,1824 +399,1352 @@ def subscription_keyboard(channels):
             callback_data="check_sub"
         )
     ])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def db_execute(query, params=()):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(query, params)
-        await db.commit()
-
-
-async def db_fetchone(query, params=()):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(query, params)
-        row = await cur.fetchone()
-        return dict(row) if row else None
-
-
-async def db_fetchall(query, params=()):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(query, params)
-        return [dict(x) for x in await cur.fetchall()]
-
-
-# =========================================================
-# 5. DATABASE VA MIGRATSIYA
-# =========================================================
-
-async def init_db():
-    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA foreign_keys=ON")
-
-        await db.executescript("""
-        CREATE TABLE IF NOT EXISTS users(
-            user_id INTEGER PRIMARY KEY,
-            full_name TEXT NOT NULL,
-            username TEXT,
-            balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
-            total_earned INTEGER NOT NULL DEFAULT 0,
-            total_spent INTEGER NOT NULL DEFAULT 0,
-            referrer_id INTEGER,
-            is_banned INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            last_active TEXT NOT NULL,
-            last_daily TEXT,
-            daily_streak INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY(referrer_id) REFERENCES users(user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS channels(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT UNIQUE NOT NULL,
-            title TEXT NOT NULL,
-            invite_link TEXT,
-            active INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS orders(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount INTEGER NOT NULL CHECK(amount IN (15,25)),
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            decided_at TEXT,
-            decided_by INTEGER,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS transactions(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            amount INTEGER NOT NULL,
-            kind TEXT NOT NULL,
-            description TEXT,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS promo_codes(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT UNIQUE COLLATE NOCASE NOT NULL,
-            amount INTEGER NOT NULL,
-            usage_limit INTEGER NOT NULL DEFAULT 0,
-            used_count INTEGER NOT NULL DEFAULT 0,
-            expires_at TEXT,
-            active INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS promo_uses(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            promo_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            used_at TEXT NOT NULL,
-            UNIQUE(promo_id,user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS tasks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            link TEXT,
-            reward INTEGER NOT NULL,
-            active INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS task_completions(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            UNIQUE(task_id,user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS support_messages(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            admin_id INTEGER,
-            message_id INTEGER,
-            text TEXT,
-            status TEXT NOT NULL DEFAULT 'new',
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS news(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS settings(
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS admin_logs(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER NOT NULL,
-            action TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS broadcasts(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER NOT NULL,
-            target TEXT NOT NULL,
-            success INTEGER NOT NULL DEFAULT 0,
-            failed INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-        CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-        CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
-        """)
-
-        defaults = {
-            "referral_reward": "2",
-            "daily_bonus": "1",
-            "weekly_bonus": "5",
-            "daily_enabled": "1",
-            "weekly_enabled": "1"
-        }
-
-        for key, value in defaults.items():
-            await db.execute(
-                "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
-                (key, value)
-            )
-
-        await db.commit()
-
-
-async def get_setting(key, default="0"):
-    row = await db_fetchone(
-        "SELECT value FROM settings WHERE key=?",
-        (key,)
-    )
-    return row["value"] if row else default
-
-
-async def set_setting(key, value):
-    await db_execute("""
-        INSERT INTO settings(key,value) VALUES(?,?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, (key, str(value)))
-
-
-# =========================================================
-# 6. BALANSNI XAVFSIZ O'ZGARTIRISH
-# =========================================================
-
-async def change_balance(user_id, amount, kind, description=""):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute(
-            "SELECT balance FROM users WHERE user_id=?",
-            (user_id,)
-        )
-        row = await cur.fetchone()
-
-        if not row or row[0] + amount < 0:
-            await db.rollback()
-            return False
-
-        await db.execute("""
-            UPDATE users
-            SET balance=balance+?,
-                total_earned=total_earned+?,
-                total_spent=total_spent+?
-            WHERE user_id=?
-        """, (
-            amount,
-            max(amount, 0),
-            max(-amount, 0),
-            user_id
-        ))
-
-        await db.execute("""
-            INSERT INTO transactions(user_id,amount,kind,description,created_at)
-            VALUES(?,?,?,?,?)
-        """, (user_id, amount, kind, description, now()))
-
-        await db.commit()
+async def allowed_user(user_id, message=None):
+    if is_admin(user_id):
         return True
 
-
-# =========================================================
-# 7. OBUNANI TEKSHIRISH
-# =========================================================
-
-async def get_channels():
-    return await db_fetchall(
-        "SELECT * FROM channels WHERE active=1"
+    user = await fetchone(
+        "SELECT blocked FROM users WHERE user_id=?", (user_id,)
     )
+    if user and user[0]:
+        if message:
+            await message.answer("⛔ Siz botdan foydalanish huquqidan mahrum qilingansiz.")
+        return False
 
-
-async def check_subscription(user_id):
-    channels = await get_channels()
-
-    for channel in channels:
-        try:
-            member = await bot.get_chat_member(
-                chat_id=channel["chat_id"],
-                user_id=user_id
+    missing = await check_subscription(user_id)
+    if missing:
+        if message:
+            await message.answer(
+                "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling:",
+                reply_markup=await subscription_keyboard(missing)
             )
-            if member.status in (
-                ChatMemberStatus.LEFT,
-                ChatMemberStatus.KICKED
-            ):
-                return False
-        except TelegramAPIError:
-            log.exception("Kanal obunasini tekshirishda xato")
-            return False
+        return False
 
     return True
 
 
-async def subscription_required(message: Message):
-    channels = await get_channels()
-    if not channels:
-        return True
-
-    if await check_subscription(message.from_user.id):
-        return True
-
-    await message.answer(
-        "🔒 Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling:",
-        reply_markup=subscription_keyboard(channels)
-    )
-    return False
+async def safe_edit(call, text, reply_markup=None):
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest:
+        await call.answer()
 
 
 # =========================================================
-# 8. FOYDALANUVCHINI RO'YXATDAN O'TKAZISH
-# =========================================================
-
-async def register_user(user, referrer_id=None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("PRAGMA foreign_keys=ON")
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute(
-            "SELECT user_id FROM users WHERE user_id=?",
-            (user.id,)
-        )
-        existing = await cur.fetchone()
-
-        if existing:
-            await db.execute("""
-                UPDATE users SET full_name=?, username=?, last_active=?
-                WHERE user_id=?
-            """, (
-                user.full_name,
-                user.username,
-                now(),
-                user.id
-            ))
-            await db.commit()
-            return False
-
-        if referrer_id == user.id:
-            referrer_id = None
-
-        if referrer_id:
-            cur = await db.execute(
-                "SELECT user_id FROM users WHERE user_id=?",
-                (referrer_id,)
-            )
-            if not await cur.fetchone():
-                referrer_id = None
-
-        await db.execute("""
-            INSERT INTO users(
-                user_id,full_name,username,referrer_id,created_at,last_active
-            ) VALUES(?,?,?,?,?,?)
-        """, (
-            user.id,
-            user.full_name,
-            user.username,
-            referrer_id,
-            now(),
-            now()
-        ))
-
-        if referrer_id:
-            cur = await db.execute(
-                "SELECT value FROM settings WHERE key='referral_reward'"
-            )
-            reward_row = await cur.fetchone()
-            reward = int(reward_row[0]) if reward_row else 2
-
-            await db.execute("""
-                UPDATE users
-                SET balance=balance+?,
-                    total_earned=total_earned+?
-                WHERE user_id=?
-            """, (reward, reward, referrer_id))
-
-            await db.execute("""
-                INSERT INTO transactions(user_id,amount,kind,description,created_at)
-                VALUES(?,?,?,?,?)
-            """, (
-                referrer_id,
-                reward,
-                "referral",
-                f"Referal: {user.id}",
-                now()
-            ))
-
-        await db.commit()
-        return True
-
-
-# =========================================================
-# 9. START
+# START
 # =========================================================
 
 @dp.message(CommandStart())
-async def start_handler(message: Message, state: FSMContext):
+async def start(message: Message, state: FSMContext):
     await state.clear()
 
-    args = message.text.split(maxsplit=1)
-    referrer_id = None
+    referrer = None
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1 and parts[1].isdigit():
+        referrer = int(parts[1])
 
-    if len(args) > 1:
-        payload = args[1].strip()
-        if payload.isdigit():
-            referrer_id = int(payload)
+    await register_user(message, referrer)
 
-    await register_user(message.from_user, referrer_id)
+    if not await allowed_user(message.from_user.id, message):
+        return
 
-    user = await db_fetchone(
-        "SELECT * FROM users WHERE user_id=?",
-        (message.from_user.id,)
+    text = (
+        f"👋 Assalomu alaykum, {message.from_user.full_name}!\n\n"
+        "🤖 Botimizga xush kelibsiz!\n"
+        "Kerakli bo‘limni tanlang:"
     )
 
-    if user and user["is_banned"]:
-        await message.answer("⛔ Siz botdan foydalanish huquqidan mahrum qilingansiz.")
-        return
+    await message.answer(text, reply_markup=main_menu())
 
-    if not await subscription_required(message):
-        return
+
+@dp.message(Command("admin"))
+async def admin_command(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔ Siz admin emassiz.")
 
     await message.answer(
-        f"👋 Assalomu alaykum, <b>{message.from_user.full_name}</b>!\n\n"
-        "Botimizga xush kelibsiz. Kerakli bo‘limni tanlang:",
-        reply_markup=user_keyboard()
+        "🛠 ADMIN PANEL",
+        reply_markup=admin_menu(message.from_user.id)
     )
 
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub_callback(call: CallbackQuery):
-    if await check_subscription(call.from_user.id):
-        await call.message.answer(
-            "✅ Obuna tasdiqlandi!",
-            reply_markup=user_keyboard()
-        )
-    else:
-        await call.answer(
-            "Hali barcha kanallarga obuna bo‘lmagansiz.",
-            show_alert=True
-        )
+    missing = await check_subscription(call.from_user.id)
 
-
-# =========================================================
-# 10. FOYDALANUVCHI PANELI
-# =========================================================
-
-@dp.message(F.text == "👥 Referal")
-async def referral_handler(message: Message):
-    if not await subscription_required(message):
+    if missing:
+        await call.answer("❌ Hali barcha kanallarga obuna bo‘lmagansiz.", show_alert=True)
         return
+
+    await call.answer("✅ Obuna tasdiqlandi!")
+    await safe_edit(
+        call,
+        "✅ Obuna tasdiqlandi!\n\nAsosiy menyu:",
+        main_menu()
+    )
+
+
+# =========================================================
+# FOYDALANUVCHI PANELI
+# =========================================================
+
+@dp.callback_query(F.data == "back_home")
+async def back_home(call: CallbackQuery):
+    if not await allowed_user(call.from_user.id):
+        await call.answer("Avval majburiy kanallarga obuna bo‘ling.", show_alert=True)
+        return
+
+    await safe_edit(call, "🏠 ASOSIY MENYU", main_menu())
+
+
+@dp.callback_query(F.data == "referral")
+async def referral(call: CallbackQuery):
+    if not await allowed_user(call.from_user.id):
+        return await call.answer("Kanalga obuna bo‘ling.", show_alert=True)
 
     me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start={message.from_user.id}"
-
-    user = await db_fetchone(
-        "SELECT COUNT(*) AS n FROM users WHERE referrer_id=?",
-        (message.from_user.id,)
+    count = await fetchone(
+        "SELECT COUNT(*) FROM users WHERE referrer_id=?",
+        (call.from_user.id,)
     )
-    reward = await get_setting("referral_reward", "2")
+    link = f"https://t.me/{me.username}?start={call.from_user.id}"
 
-    await message.answer(
-        "👥 <b>Referal bo‘limi</b>\n\n"
-        f"🔗 Sizning havolangiz:\n<code>{link}</code>\n\n"
-        f"👤 Taklif qilganlaringiz: {user['n']}\n"
-        f"⭐ Har bir haqiqiy referal uchun: {reward} Stars"
-    )
-
-
-@dp.message(F.text == "💰 Mening hisobim")
-async def balance_handler(message: Message):
-    if not await subscription_required(message):
-        return
-
-    user = await db_fetchone(
-        "SELECT * FROM users WHERE user_id=?",
-        (message.from_user.id,)
-    )
-
-    await message.answer(
-        "💰 <b>Sizning hisobingiz</b>\n\n"
-        f"⭐ Joriy balans: <b>{user['balance']}</b>\n"
-        f"📈 Jami daromad: {user['total_earned']}\n"
-        f"📉 Sarflangan: {user['total_spent']}\n"
-    )
-
-    rows = await db_fetchall("""
-        SELECT amount,kind,description,created_at
-        FROM transactions WHERE user_id=?
-        ORDER BY id DESC LIMIT 10
-    """, (message.from_user.id,))
-
-    if rows:
-        text = "\n<b>Oxirgi tranzaksiyalar:</b>\n"
-        for row in rows:
-            sign = "+" if row["amount"] > 0 else ""
-            text += (
-                f"\n{sign}{row['amount']} ⭐ — {row['kind']}"
-                f"\n<code>{row['created_at']}</code>\n"
-            )
-        await message.answer(text)
-
-
-# =========================================================
-# 11. KUNLIK BONUS
-# =========================================================
-
-@dp.message(F.text == "📅 Kunlik bonus")
-async def daily_bonus(message: Message):
-    if not await subscription_required(message):
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute(
-            "SELECT last_daily,daily_streak FROM users WHERE user_id=?",
-            (message.from_user.id,)
-        )
-        row = await cur.fetchone()
-
-        if row[0] == today():
-            await db.rollback()
-            await message.answer("⏳ Bugungi bonusni olib bo‘lgansiz.")
-            return
-
-        streak = row[1] + 1 if row[0] == (date.today() - timedelta(days=1)).isoformat() else 1
-        reward = int(await get_setting("daily_bonus", "1"))
-        enabled = await get_setting("daily_enabled", "1")
-
-        if enabled != "1":
-            await db.rollback()
-            await message.answer("Kunlik bonus vaqtincha o‘chirilgan.")
-            return
-
-        await db.execute("""
-            UPDATE users
-            SET balance=balance+?,
-                total_earned=total_earned+?,
-                last_daily=?,
-                daily_streak=?
-            WHERE user_id=?
-        """, (reward, reward, today(), streak, message.from_user.id))
-
-        await db.execute("""
-            INSERT INTO transactions(user_id,amount,kind,description,created_at)
-            VALUES(?,?,?,?,?)
-        """, (
-            message.from_user.id,
-            reward,
-            "daily_bonus",
-            f"Ketma-ket kun: {streak}",
-            now()
-        ))
-
-        await db.commit()
-
-    await message.answer(
-        f"🎉 Siz {reward} Stars bonus oldingiz!\n"
-        f"🔥 Ketma-ket kunlar: {streak}"
+    await safe_edit(
+        call,
+        "👥 REFERAL TIZIMI\n\n"
+        f"🔗 Sizning havolangiz:\n{link}\n\n"
+        f"👤 Taklif qilganlaringiz: {count[0]}\n"
+        f"🎁 Har bir referal uchun: {REFERRAL_REWARD} Stars",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
     )
 
 
-# =========================================================
-# 12. STARS YECHISH
-# =========================================================
+@dp.callback_query(F.data == "balance")
+async def balance(call: CallbackQuery):
+    row = await fetchone(
+        "SELECT balance FROM users WHERE user_id=?",
+        (call.from_user.id,)
+    )
+    amount = row[0] if row else 0
 
-@dp.message(F.text == "⭐ Stars yechish")
-async def withdraw_menu(message: Message):
-    if not await subscription_required(message):
-        return
+    await safe_edit(
+        call,
+        f"💰 HISOBINGIZ\n\n⭐ Balansingiz: {amount} Stars",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📜 Tarix", callback_data="history")],
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
+    )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+
+@dp.callback_query(F.data == "history")
+async def history(call: CallbackQuery):
+    rows = await fetchall(
+        "SELECT amount, reason, created FROM transactions "
+        "WHERE user_id=? ORDER BY id DESC LIMIT 15",
+        (call.from_user.id,)
+    )
+
+    text = "📜 BALANS TARIXI\n\n"
+    if not rows:
+        text += "Hozircha operatsiyalar mavjud emas."
+    else:
+        for amount, reason, created in rows:
+            sign = "+" if amount > 0 else ""
+            text += f"{sign}{amount} ⭐ — {reason}\n"
+
+    await safe_edit(
+        call, text,
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="balance")]
+        ])
+    )
+
+
+@dp.callback_query(F.data == "withdraw")
+async def withdraw(call: CallbackQuery):
+    row = await fetchone(
+        "SELECT balance FROM users WHERE user_id=?",
+        (call.from_user.id,)
+    )
+    balance_amount = row[0] if row else 0
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="15 ⭐", callback_data="withdraw:15"),
-            InlineKeyboardButton(text="25 ⭐", callback_data="withdraw:25")
+            InlineKeyboardButton(text="15 ⭐", callback_data="withdraw_15"),
+            InlineKeyboardButton(text="25 ⭐", callback_data="withdraw_25")
         ],
-        [
-            InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel")
-        ]
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
     ])
 
-    await message.answer(
-        "⭐ Yechmoqchi bo‘lgan miqdoringizni tanlang:",
-        reply_markup=kb
+    await safe_edit(
+        call,
+        f"⭐ STARS YECHISH\n\n"
+        f"Balansingiz: {balance_amount} Stars\n"
+        "Yechish miqdorini tanlang.\n"
+        "So‘rov admin tomonidan ko‘rib chiqiladi.",
+        keyboard
     )
 
 
-@dp.callback_query(F.data.startswith("withdraw:"))
-async def withdraw_create(call: CallbackQuery):
-    amount = int(call.data.split(":")[1])
+async def create_withdrawal(call, amount):
+    user_id = call.from_user.id
 
-    if amount not in (15, 25):
-        await call.answer("Noto‘g‘ri miqdor.", show_alert=True)
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute(
-            "SELECT balance FROM users WHERE user_id=?",
-            (call.from_user.id,)
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("BEGIN IMMEDIATE")
+        cur = await con.execute(
+            "SELECT balance FROM users WHERE user_id=?", (user_id,)
         )
         row = await cur.fetchone()
 
         if not row or row[0] < amount:
-            await db.rollback()
-            await call.answer("Balansingiz yetarli emas!", show_alert=True)
+            await con.rollback()
+            await call.answer("❌ Balansingiz yetarli emas.", show_alert=True)
             return
 
-        await db.execute(
-            "UPDATE users SET balance=balance-?,total_spent=total_spent+? WHERE user_id=?",
-            (amount, amount, call.from_user.id)
+        await con.execute(
+            "UPDATE users SET balance=balance-? WHERE user_id=?",
+            (amount, user_id)
         )
+        await con.execute(
+            "INSERT INTO withdrawals(user_id, amount, created) VALUES(?,?,?)",
+            (user_id, amount, datetime.now().isoformat())
+        )
+        await con.execute(
+            "INSERT INTO transactions(user_id, amount, reason, created) VALUES(?,?,?,?)",
+            (user_id, -amount, "Stars yechish so‘rovi", datetime.now().isoformat())
+        )
+        await con.commit()
 
-        cur = await db.execute("""
-            INSERT INTO orders(user_id,amount,status,created_at)
-            VALUES(?,?,'pending',?)
-        """, (call.from_user.id, amount, now()))
+    row = await fetchone(
+        "SELECT id FROM withdrawals WHERE user_id=? ORDER BY id DESC LIMIT 1",
+        (user_id,)
+    )
+    request_id = row[0]
 
-        order_id = cur.lastrowid
-
-        await db.execute("""
-            INSERT INTO transactions(user_id,amount,kind,description,created_at)
-            VALUES(?,?,?,?,?)
-        """, (
-            call.from_user.id,
-            -amount,
-            "withdraw",
-            f"Buyurtma #{order_id}",
-            now()
-        ))
-
-        await db.commit()
-
-    user = call.from_user
-    username = f"@{user.username}" if user.username else "Yo‘q"
-
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(
-                text="✅ Tasdiqlash",
-                callback_data=f"order:approve:{order_id}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Rad etish",
-                callback_data=f"order:reject:{order_id}"
-            )
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"wd_ok_{request_id}"),
+            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"wd_no_{request_id}")
         ]
     ])
 
-    for admin_id in ADMIN_IDS:
+    for admin in ADMINS:
         try:
             await bot.send_message(
-                admin_id,
-                "📦 <b>Yangi buyurtma!</b>\n\n"
-                f"🆔 Buyurtma: #{order_id}\n"
-                f"👤 Ism: {user.full_name}\n"
-                f"🔗 Username: {username}\n"
-                f"🆔 Telegram ID: <code>{user.id}</code>\n"
-                f"⭐ Miqdor: {amount}\n"
-                f"🕒 Vaqt: {now()}",
-                reply_markup=admin_kb
+                admin,
+                f"💸 YANGI YECHISH SO‘ROVI\n\n"
+                f"ID: {request_id}\n"
+                f"Foydalanuvchi: {user_id}\n"
+                f"Miqdor: {amount} Stars",
+                reply_markup=keyboard
             )
-        except TelegramAPIError:
-            log.exception("Adminga buyurtma yuborilmadi: %s", admin_id)
+        except Exception:
+            pass
 
-    await call.message.answer(
-        f"✅ #{order_id} buyurtmangiz qabul qilindi.\n"
-        "Holati: ⏳ Kutilmoqda."
+    await call.answer("So‘rovingiz yuborildi!", show_alert=True)
+    await safe_edit(
+        call,
+        "✅ Yechish so‘rovingiz adminga yuborildi.",
+        main_menu()
     )
+
+
+@dp.callback_query(F.data.startswith("withdraw_"))
+async def withdraw_amount(call: CallbackQuery):
+    try:
+        amount = int(call.data.split("_")[1])
+    except ValueError:
+        return
+
+    if amount not in (MIN_WITHDRAW, MAX_WITHDRAW):
+        return await call.answer("Noto‘g‘ri miqdor.", show_alert=True)
+
+    await create_withdrawal(call, amount)
+
+
+@dp.callback_query(F.data.startswith("wd_ok_"))
+async def withdrawal_approve(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    request_id = int(call.data.split("_")[2])
+
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute(
+            "UPDATE withdrawals SET status='approved' "
+            "WHERE id=? AND status='pending'",
+            (request_id,)
+        )
+        await con.commit()
+        changed = cur.rowcount
+
+    if not changed:
+        return await call.answer("Bu so‘rov oldin ko‘rib chiqilgan.", show_alert=True)
+
+    row = await fetchone(
+        "SELECT user_id, amount FROM withdrawals WHERE id=?",
+        (request_id,)
+    )
+    if row:
+        try:
+            await bot.send_message(
+                row[0],
+                f"✅ {row[1]} Stars yechish so‘rovingiz tasdiqlandi."
+            )
+        except Exception:
+            pass
+
+    await call.message.edit_text(f"✅ #{request_id} so‘rov tasdiqlandi.")
+    await call.answer("Tasdiqlandi.")
+
+
+@dp.callback_query(F.data.startswith("wd_no_"))
+async def withdrawal_reject(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    request_id = int(call.data.split("_")[2])
+
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("BEGIN IMMEDIATE")
+        cur = await con.execute(
+            "SELECT user_id, amount FROM withdrawals "
+            "WHERE id=? AND status='pending'",
+            (request_id,)
+        )
+        row = await cur.fetchone()
+
+        if not row:
+            await con.rollback()
+            return await call.answer("So‘rov oldin ko‘rib chiqilgan.", show_alert=True)
+
+        user_id, amount = row
+        await con.execute(
+            "UPDATE withdrawals SET status='rejected' WHERE id=?",
+            (request_id,)
+        )
+        await con.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?",
+            (amount, user_id)
+        )
+        await con.execute(
+            "INSERT INTO transactions(user_id, amount, reason, created) "
+            "VALUES(?,?,?,?)",
+            (user_id, amount, "Rad etilgan so‘rov qaytarildi", datetime.now().isoformat())
+        )
+        await con.commit()
+
+    try:
+        await bot.send_message(
+            user_id,
+            f"❌ {amount} Stars yechish so‘rovingiz rad etildi.\n"
+            "Mablag‘ balansingizga qaytarildi."
+        )
+    except Exception:
+        pass
+
+    await call.message.edit_text(f"❌ #{request_id} so‘rov rad etildi. Mablag‘ qaytarildi.")
+    await call.answer("Rad etildi.")
+
+
+@dp.callback_query(F.data == "promo")
+async def promo_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.waiting_promo)
+    await call.message.answer("🎁 Promo-kodni yuboring:")
     await call.answer()
 
 
-@dp.callback_query(F.data.startswith("order:"))
-async def order_decision(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Sizda ruxsat yo‘q.", show_alert=True)
-        return
-
-    _, action, order_id_text = call.data.split(":")
-    order_id = int(order_id_text)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute(
-            "SELECT user_id,amount,status FROM orders WHERE id=?",
-            (order_id,)
-        )
-        order = await cur.fetchone()
-
-        if not order or order[2] != "pending":
-            await db.rollback()
-            await call.answer("Buyurtma allaqachon ko‘rib chiqilgan.", show_alert=True)
-            return
-
-        user_id, amount, status = order
-
-        if action == "approve":
-            new_status = "approved"
-        elif action == "reject":
-            new_status = "rejected"
-            await db.execute("""
-                UPDATE users
-                SET balance=balance+?,
-                    total_earned=total_earned+?
-                WHERE user_id=?
-            """, (amount, amount, user_id))
-
-            await db.execute("""
-                INSERT INTO transactions(user_id,amount,kind,description,created_at)
-                VALUES(?,?,?,?,?)
-            """, (
-                user_id,
-                amount,
-                "refund",
-                f"Buyurtma #{order_id} qaytarildi",
-                now()
-            ))
-        else:
-            await db.rollback()
-            return
-
-        await db.execute("""
-            UPDATE orders
-            SET status=?,decided_at=?,decided_by=?
-            WHERE id=? AND status='pending'
-        """, (new_status, now(), call.from_user.id, order_id))
-
-        await db.execute("""
-            INSERT INTO admin_logs(admin_id,action,created_at)
-            VALUES(?,?,?)
-        """, (
-            call.from_user.id,
-            f"Order {order_id}: {new_status}",
-            now()
-        ))
-
-        await db.commit()
-
-    await bot.send_message(
-        user_id,
-        f"📦 #{order_id} buyurtmangiz holati: "
-        f"{'✅ Tasdiqlandi' if action == 'approve' else '❌ Rad etildi'}"
-        + ("\nStars balansingizga qaytarildi." if action == "reject" else "")
+@dp.message(UserState.waiting_promo)
+async def promo_enter(message: Message, state: FSMContext):
+    code = message.text.strip().upper()
+    promo = await fetchone(
+        "SELECT reward, max_uses, used_count, expires FROM promos WHERE code=?",
+        (code,)
     )
 
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("Qaror saqlandi.")
+    if not promo:
+        await message.answer("❌ Bunday promo-kod topilmadi.")
+        await state.clear()
+        return
+
+    reward, max_uses, used_count, expires = promo
+
+    if used_count >= max_uses:
+        await message.answer("❌ Promo-kod ishlatish limiti tugagan.")
+        await state.clear()
+        return
+
+    if expires and datetime.now() > datetime.fromisoformat(expires):
+        await message.answer("❌ Promo-kod muddati tugagan.")
+        await state.clear()
+        return
+
+    used = await fetchone(
+        "SELECT 1 FROM promo_users WHERE code=? AND user_id=?",
+        (code, message.from_user.id)
+    )
+    if used:
+        await message.answer("❌ Bu promo-kodni oldin ishlatgansiz.")
+        await state.clear()
+        return
+
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("BEGIN IMMEDIATE")
+        cur = await con.execute(
+            "SELECT used_count, max_uses FROM promos WHERE code=?",
+            (code,)
+        )
+        latest = await cur.fetchone()
+
+        if not latest or latest[0] >= latest[1]:
+            await con.rollback()
+            await message.answer("❌ Promo-kod limiti tugagan.")
+            await state.clear()
+            return
+
+        await con.execute(
+            "INSERT INTO promo_users(code, user_id) VALUES(?,?)",
+            (code, message.from_user.id)
+        )
+        await con.execute(
+            "UPDATE promos SET used_count=used_count+1 WHERE code=?",
+            (code,)
+        )
+        await con.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?",
+            (reward, message.from_user.id)
+        )
+        await con.execute(
+            "INSERT INTO transactions(user_id, amount, reason, created) "
+            "VALUES(?,?,?,?)",
+            (message.from_user.id, reward, f"Promo: {code}", datetime.now().isoformat())
+        )
+        await con.commit()
+
+    await message.answer(f"🎉 Promo qabul qilindi!\n⭐ +{reward} Stars")
+    await state.clear()
 
 
-@dp.message(F.text == "📦 Buyurtmalarim")
-async def my_orders(message: Message):
-    rows = await db_fetchall("""
-        SELECT id,amount,status,created_at
-        FROM orders WHERE user_id=?
-        ORDER BY id DESC LIMIT 20
-    """, (message.from_user.id,))
+@dp.callback_query(F.data == "daily")
+async def daily_bonus(call: CallbackQuery):
+    today = datetime.now().date().isoformat()
+    row = await fetchone(
+        "SELECT last_claim FROM daily_claims WHERE user_id=?",
+        (call.from_user.id,)
+    )
+
+    if row and row[0] == today:
+        return await call.answer("Bugungi bonusni olib bo‘lgansiz.", show_alert=True)
+
+    reward = 1
+
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("BEGIN IMMEDIATE")
+        cur = await con.execute(
+            "SELECT last_claim FROM daily_claims WHERE user_id=?",
+            (call.from_user.id,)
+        )
+        latest = await cur.fetchone()
+
+        if latest and latest[0] == today:
+            await con.rollback()
+            return await call.answer("Bugungi bonusni olib bo‘lgansiz.", show_alert=True)
+
+        await con.execute(
+            "INSERT INTO daily_claims(user_id, last_claim) VALUES(?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET last_claim=excluded.last_claim",
+            (call.from_user.id, today)
+        )
+        await con.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?",
+            (reward, call.from_user.id)
+        )
+        await con.execute(
+            "INSERT INTO transactions(user_id, amount, reason, created) "
+            "VALUES(?,?,?,?)",
+            (call.from_user.id, reward, "Kunlik bonus", datetime.now().isoformat())
+        )
+        await con.commit()
+
+    await call.answer(f"🎁 +{reward} Stars olindi!", show_alert=True)
+
+
+@dp.callback_query(F.data == "tasks")
+async def tasks_list(call: CallbackQuery):
+    rows = await fetchall(
+        "SELECT id, title, link, reward FROM tasks WHERE active=1 ORDER BY id DESC"
+    )
 
     if not rows:
-        await message.answer("Sizda hali buyurtmalar mavjud emas.")
-        return
-
-    text = "📦 <b>Buyurtmalaringiz</b>\n"
-    for row in rows:
-        text += (
-            f"\n🆔 #{row['id']} — {row['amount']} ⭐"
-            f"\nHolati: {row['status']}"
-            f"\nVaqti: {row['created_at']}\n"
+        return await safe_edit(
+            call, "📋 Hozircha topshiriqlar mavjud emas.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+            ])
         )
 
-    await message.answer(text)
+    text = "📋 TOPSHIRIQLAR\n\n"
+    buttons = []
 
-
-# =========================================================
-# 13. PROMOKOD
-# =========================================================
-
-@dp.message(F.text == "🎁 Promokod")
-async def promo_start(message: Message, state: FSMContext):
-    await state.set_state(PromoState.enter)
-    await message.answer(
-        "🎁 Promokodni yuboring:",
-        reply_markup=cancel_keyboard()
-    )
-
-
-@dp.message(PromoState.enter)
-async def promo_use(message: Message, state: FSMContext):
-    code = message.text.strip().upper()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        cur = await db.execute("""
-            SELECT id,amount,usage_limit,used_count,expires_at,active
-            FROM promo_codes WHERE code=? COLLATE NOCASE
-        """, (code,))
-        promo = await cur.fetchone()
-
-        if not promo or promo[5] != 1:
-            await db.rollback()
-            await message.answer("❌ Promokod topilmadi yoki faol emas.")
-            return
-
-        promo_id, amount, limit_count, used_count, expires_at, active = promo
-
-        if limit_count > 0 and used_count >= limit_count:
-            await db.rollback()
-            await message.answer("❌ Promokod limiti tugagan.")
-            return
-
-        if expires_at and datetime.fromisoformat(expires_at) < datetime.utcnow():
-            await db.rollback()
-            await message.answer("⌛ Promokod muddati tugagan.")
-            return
-
-        try:
-            await db.execute("""
-                INSERT INTO promo_uses(promo_id,user_id,used_at)
-                VALUES(?,?,?)
-            """, (promo_id, message.from_user.id, now()))
-        except aiosqlite.IntegrityError:
-            await db.rollback()
-            await message.answer("Siz bu koddan avval foydalangansiz.")
-            return
-
-        await db.execute("""
-            UPDATE promo_codes SET used_count=used_count+1 WHERE id=?
-        """, (promo_id,))
-
-        await db.execute("""
-            UPDATE users
-            SET balance=balance+?,total_earned=total_earned+?
-            WHERE user_id=?
-        """, (amount, amount, message.from_user.id))
-
-        await db.execute("""
-            INSERT INTO transactions(user_id,amount,kind,description,created_at)
-            VALUES(?,?,?,?,?)
-        """, (
-            message.from_user.id,
-            amount,
-            "promo",
-            f"Promokod {code}",
-            now()
-        ))
-
-        await db.commit()
-
-    await state.clear()
-    await message.answer(f"🎉 Promokod qabul qilindi! +{amount} Stars.")
-
-
-# =========================================================
-# 14. VAZIFALAR
-# =========================================================
-
-@dp.message(F.text == "📋 Vazifalar")
-async def tasks_list(message: Message):
-    tasks = await db_fetchall(
-        "SELECT * FROM tasks WHERE active=1 ORDER BY id DESC"
-    )
-
-    if not tasks:
-        await message.answer("Hozircha faol vazifalar yo‘q.")
-        return
-
-    for task in tasks:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔗 Vazifani ochish",
-                    url=task["link"]
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="✅ Bajarishni yuborish",
-                    callback_data=f"task:{task['id']}"
-                )
-            ]
-        ]) if task["link"] else InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Bajarishni yuborish",
-                    callback_data=f"task:{task['id']}"
-                )
-            ]
+    for task_id, title, link, reward in rows:
+        text += f"• {title} — {reward} ⭐\n"
+        buttons.append([
+            InlineKeyboardButton(text=f"🔗 {title}", url=link)
+        ])
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📨 Bajardim: {title}",
+                callback_data=f"task_claim_{task_id}"
+            )
         ])
 
-        await message.answer(
-            f"📋 <b>{task['title']}</b>\n"
-            f"⭐ Mukofot: {task['reward']} Stars\n\n"
-            "Bajarishni tekshirish uchun yuboring.",
-            reply_markup=kb
-        )
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")
+    ])
+
+    await safe_edit(
+        call, text,
+        InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
 
 
-@dp.callback_query(F.data.startswith("task:"))
-async def task_complete(call: CallbackQuery):
-    task_id = int(call.data.split(":")[1])
-
-    task = await db_fetchone(
-        "SELECT * FROM tasks WHERE id=? AND active=1",
+@dp.callback_query(F.data.startswith("task_claim_"))
+async def task_claim(call: CallbackQuery):
+    task_id = int(call.data.split("_")[2])
+    task = await fetchone(
+        "SELECT title, reward FROM tasks WHERE id=? AND active=1",
         (task_id,)
     )
 
     if not task:
-        await call.answer("Vazifa mavjud emas.", show_alert=True)
-        return
+        return await call.answer("Topshiriq topilmadi.", show_alert=True)
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        try:
-            await db.execute("""
-                INSERT INTO task_completions(task_id,user_id,status,created_at)
-                VALUES(?,?,?,?)
-            """, (task_id, call.from_user.id, "pending", now()))
-            await db.commit()
-        except aiosqlite.IntegrityError:
-            await call.answer("Bu vazifani oldin yuborgansiz.", show_alert=True)
-            return
+    exists = await fetchone(
+        "SELECT status FROM task_claims WHERE task_id=? AND user_id=?",
+        (task_id, call.from_user.id)
+    )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ Tasdiqlash",
-                callback_data=f"taskok:{task_id}:{call.from_user.id}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Rad etish",
-                callback_data=f"taskno:{task_id}:{call.from_user.id}"
-            )
-        ]
-    ])
+    if exists:
+        return await call.answer("So‘rovingiz oldin yuborilgan.", show_alert=True)
 
-    for admin_id in ADMIN_IDS:
+    await execute(
+        "INSERT INTO task_claims(task_id, user_id) VALUES(?,?)",
+        (task_id, call.from_user.id)
+    )
+
+    for admin in ADMINS:
         try:
             await bot.send_message(
-                admin_id,
-                f"📋 Vazifa tekshiruvi\n"
-                f"Foydalanuvchi: {call.from_user.full_name}\n"
-                f"ID: {call.from_user.id}\n"
-                f"Vazifa: {task['title']}",
-                reply_markup=kb
+                admin,
+                f"📋 TOPSHIRIQ TEKSHIRUVI\n\n"
+                f"Foydalanuvchi: {call.from_user.id}\n"
+                f"Topshiriq: {task[0]}\n"
+                f"Mukofot: {task[1]} Stars\n"
+                f"So‘rov ID: {task_id}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ Tasdiqlash",
+                            callback_data=f"task_ok_{task_id}_{call.from_user.id}"
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ Rad etish",
+                            callback_data=f"task_no_{task_id}_{call.from_user.id}"
+                        )
+                    ]
+                ])
             )
-        except TelegramAPIError:
-            log.exception("Vazifa tekshiruvi adminga yuborilmadi")
+        except Exception:
+            pass
 
-    await call.answer("Tekshiruvga yuborildi.")
-    await call.message.answer("⏳ Vazifangiz admin tekshiruviga yuborildi.")
+    await call.answer("Tekshirish uchun adminga yuborildi.", show_alert=True)
 
 
-@dp.callback_query(F.data.startswith("taskok:"))
+@dp.callback_query(F.data.startswith("task_ok_"))
 async def task_approve(call: CallbackQuery):
     if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
 
-    _, task_id, user_id = call.data.split(":")
+    _, _, task_id, user_id = call.data.split("_")
     task_id, user_id = int(task_id), int(user_id)
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    task = await fetchone(
+        "SELECT reward FROM tasks WHERE id=?", (task_id,)
+    )
+    claim = await fetchone(
+        "SELECT status FROM task_claims WHERE task_id=? AND user_id=?",
+        (task_id, user_id)
+    )
 
-        cur = await db.execute("""
-            SELECT status FROM task_completions
-            WHERE task_id=? AND user_id=?
-        """, (task_id, user_id))
-        row = await cur.fetchone()
+    if not task or not claim or claim[0] != "pending":
+        return await call.answer("So‘rov oldin ko‘rib chiqilgan.", show_alert=True)
 
-        if not row or row[0] != "pending":
-            await db.rollback()
-            await call.answer("Bu vazifa allaqachon ko‘rilgan.")
-            return
+    await execute(
+        "UPDATE task_claims SET status='approved' WHERE task_id=? AND user_id=?",
+        (task_id, user_id)
+    )
+    await change_balance(user_id, task[0], "Topshiriq mukofoti")
 
-        cur = await db.execute(
-            "SELECT reward FROM tasks WHERE id=?",
-            (task_id,)
-        )
-        task = await cur.fetchone()
+    try:
+        await bot.send_message(user_id, f"✅ Topshiriq tasdiqlandi! +{task[0]} Stars.")
+    except Exception:
+        pass
 
-        if not task:
-            await db.rollback()
-            return
-
-        reward = task[0]
-
-        await db.execute("""
-            UPDATE task_completions SET status='approved'
-            WHERE task_id=? AND user_id=?
-        """, (task_id, user_id))
-
-        await db.execute("""
-            UPDATE users SET balance=balance+?,total_earned=total_earned+?
-            WHERE user_id=?
-        """, (reward, reward, user_id))
-
-        await db.execute("""
-            INSERT INTO transactions(user_id,amount,kind,description,created_at)
-            VALUES(?,?,?,?,?)
-        """, (user_id, reward, "task", f"Vazifa #{task_id}", now()))
-
-        await db.commit()
-
-    await bot.send_message(user_id, f"🎉 Vazifa tasdiqlandi! +{reward} Stars.")
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("Tasdiqlandi.")
+    await call.message.edit_text("✅ Topshiriq tasdiqlandi.")
+    await call.answer()
 
 
-@dp.callback_query(F.data.startswith("taskno:"))
+@dp.callback_query(F.data.startswith("task_no_"))
 async def task_reject(call: CallbackQuery):
     if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
 
-    _, task_id, user_id = call.data.split(":")
+    _, _, task_id, user_id = call.data.split("_")
     task_id, user_id = int(task_id), int(user_id)
 
-    await db_execute("""
-        UPDATE task_completions SET status='rejected'
-        WHERE task_id=? AND user_id=? AND status='pending'
-    """, (task_id, user_id))
+    await execute(
+        "UPDATE task_claims SET status='rejected' "
+        "WHERE task_id=? AND user_id=? AND status='pending'",
+        (task_id, user_id)
+    )
 
-    await bot.send_message(user_id, "❌ Vazifangiz rad etildi.")
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("Rad etildi.")
+    try:
+        await bot.send_message(user_id, "❌ Topshiriq so‘rovingiz rad etildi.")
+    except Exception:
+        pass
+
+    await call.message.edit_text("❌ Topshiriq rad etildi.")
+    await call.answer()
 
 
-# =========================================================
-# 15. REYTING
-# =========================================================
-
-@dp.message(F.text == "🏆 Reyting")
-async def ranking(message: Message):
-    rows = await db_fetchall("""
-        SELECT full_name,username,COUNT(*) AS refs
-        FROM users
-        WHERE referrer_id IS NOT NULL
-        GROUP BY referrer_id
+@dp.callback_query(F.data == "ranking")
+async def ranking(call: CallbackQuery):
+    rows = await fetchall("""
+        SELECT u.user_id, u.full_name, COUNT(r.user_id) AS refs
+        FROM users AS u
+        JOIN users AS r ON r.referrer_id=u.user_id
+        GROUP BY u.user_id, u.full_name
         ORDER BY refs DESC
         LIMIT 10
     """)
 
-    text = "🏆 <b>Referal reytingi</b>\n\n"
+    text = "🏆 REFERAL REYTINGI\n\n"
     if not rows:
         text += "Hozircha reyting bo‘sh."
     else:
         for i, row in enumerate(rows, 1):
-            text += f"{i}. {row['full_name']} — {row['refs']} ta\n"
+            text += f"{i}. {row[1]} — {row[2]} ta\n"
 
-    await message.answer(text)
-
-
-# =========================================================
-# 16. MUROJAAT
-# =========================================================
-
-@dp.message(F.text == "💬 Adminga murojaat")
-async def support_start(message: Message, state: FSMContext):
-    await state.set_state(SupportState.message)
-    await message.answer(
-        "💬 Xabaringizni yuboring. Matn, rasm yoki video yuborishingiz mumkin.",
-        reply_markup=cancel_keyboard()
+    await safe_edit(
+        call, text,
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
     )
 
 
-@dp.message(SupportState.message)
-async def support_receive(message: Message, state: FSMContext):
-    text = message.text or message.caption or "[Media xabar]"
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("""
-            INSERT INTO support_messages(user_id,text,status,created_at)
-            VALUES(?,?,?,?)
-        """, (message.from_user.id, text, "new", now()))
-        support_id = cur.lastrowid
-        await db.commit()
-
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id,
-                f"💬 <b>Yangi murojaat #{support_id}</b>\n"
-                f"👤 {message.from_user.full_name}\n"
-                f"🆔 <code>{message.from_user.id}</code>\n"
-                f"Xabar: {text}",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="✍️ Javob berish",
-                        callback_data=f"supportreply:{support_id}"
-                    )
-                ]])
-            )
-            if message.photo:
-                await bot.send_photo(admin_id, message.photo[-1].file_id)
-            elif message.video:
-                await bot.send_video(admin_id, message.video.file_id)
-        except TelegramAPIError:
-            log.exception("Murojaat adminlarga yuborilmadi")
-
-    await state.clear()
-    await message.answer("✅ Murojaatingiz yuborildi.")
-
-
-@dp.callback_query(F.data.startswith("supportreply:"))
-async def support_reply_start(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
-
-    support_id = int(call.data.split(":")[1])
-    ticket = await db_fetchone(
-        "SELECT user_id FROM support_messages WHERE id=?",
-        (support_id,)
-    )
-
-    if not ticket:
-        await call.answer("Murojaat topilmadi.", show_alert=True)
-        return
-
-    await state.set_state(SupportState.waiting_for_reply)
-    await state.update_data(
-        support_id=support_id,
-        target_user=ticket["user_id"]
-    )
-    await call.message.answer(
-        "Javob matnini yuboring:",
-        reply_markup=cancel_keyboard()
-    )
+@dp.callback_query(F.data == "support")
+async def support_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(UserState.waiting_support)
+    await call.message.answer("📨 Xabaringizni yuboring. Matn, rasm yoki video yuborishingiz mumkin.")
     await call.answer()
 
 
-@dp.message(SupportState.waiting_for_reply)
+@dp.message(UserState.waiting_support)
+async def support_receive(message: Message, state: FSMContext):
+    content = message.text or message.caption or "[Media xabar]"
+    await execute(
+        "INSERT INTO support(user_id, message, created) VALUES(?,?,?)",
+        (message.from_user.id, content, datetime.now().isoformat())
+    )
+    support_id = await fetchone(
+        "SELECT id FROM support WHERE user_id=? ORDER BY id DESC LIMIT 1",
+        (message.from_user.id,)
+    )
+
+    for admin in ADMINS:
+        try:
+            await bot.send_message(
+                admin,
+                f"📨 YANGI MUROJAAT\n"
+                f"ID: {support_id[0]}\n"
+                f"Foydalanuvchi: {message.from_user.id}\n\n"
+                f"{content}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="✉️ Javob berish",
+                        callback_data=f"reply_{message.from_user.id}"
+                    )]
+                ])
+            )
+            if message.photo:
+                await bot.send_photo(admin, message.photo[-1].file_id)
+            elif message.video:
+                await bot.send_video(admin, message.video.file_id)
+        except Exception:
+            pass
+
+    await message.answer("✅ Murojaatingiz adminga yuborildi.")
+    await state.clear()
+
+
+@dp.callback_query(F.data.startswith("reply_"))
+async def support_reply_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    user_id = int(call.data.split("_")[1])
+    await state.update_data(reply_user_id=user_id)
+    await state.set_state(AdminState.waiting_reply)
+    await call.message.answer(f"{user_id} foydalanuvchiga javob matnini yuboring:")
+    await call.answer()
+
+
+@dp.message(AdminState.waiting_reply)
 async def support_reply_send(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
 
     data = await state.get_data()
-    target = data["target_user"]
-    support_id = data["support_id"]
+    user_id = data.get("reply_user_id")
 
     try:
         await bot.send_message(
-            target,
-            "💬 <b>Admin javobi:</b>\n\n" + (message.text or message.caption or "Admin sizga javob yubordi.")
+            user_id,
+            "📨 ADMIN JAVOBI\n\n" + (message.text or message.caption or "Admin sizga xabar yubordi.")
         )
-        await db_execute("""
-            UPDATE support_messages
-            SET status='answered',admin_id=?
-            WHERE id=?
-        """, (message.from_user.id, support_id))
+        if message.photo:
+            await bot.send_photo(user_id, message.photo[-1].file_id)
+        elif message.video:
+            await bot.send_video(user_id, message.video.file_id)
+
         await message.answer("✅ Javob yuborildi.")
-    except TelegramAPIError:
+    except Exception:
         await message.answer("❌ Foydalanuvchiga xabar yuborilmadi.")
 
     await state.clear()
 
 
-# =========================================================
-# 17. YANGILIKLAR
-# =========================================================
+@dp.callback_query(F.data == "news")
+async def news_list(call: CallbackQuery):
+    rows = await fetchall("SELECT text, created FROM news ORDER BY id DESC LIMIT 10")
 
-@dp.message(F.text == "📰 Yangiliklar")
-async def show_news(message: Message):
-    rows = await db_fetchall(
-        "SELECT * FROM news ORDER BY id DESC LIMIT 10"
-    )
-
+    text = "📰 YANGILIKLAR\n\n"
     if not rows:
-        await message.answer("Hozircha yangiliklar yo‘q.")
-        return
-
-    for row in rows:
-        await message.answer(row["text"])
-
-
-@dp.message(F.text == "📖 Qo‘llanma")
-async def guide(message: Message):
-    await message.answer(
-        "📖 <b>Qo‘llanma</b>\n\n"
-        "1. Referal havolangiz orqali do‘stlaringizni taklif qiling.\n"
-        "2. Bonus va vazifalar orqali Stars yig‘ing.\n"
-        "3. Promokodlardan foydalaning.\n"
-        "4. Balansingizdan 15 yoki 25 Stars yechish uchun buyurtma bering.\n"
-        "5. Savollar bo‘lsa, adminga murojaat qiling.\n\n"
-        "Eslatma: botdagi Stars ichki hisob birligi bo‘lib, avtomatik ravishda haqiqiy Telegram Starsga teng emas."
-    )
-
-
-@dp.message(F.text == "⚙️ Sozlamalar")
-async def settings_user(message: Message):
-    await message.answer(
-        "⚙️ <b>Sozlamalar</b>\n\n"
-        "Ism: " + message.from_user.full_name + "\n"
-        f"Telegram ID: <code>{message.from_user.id}</code>"
-    )
-
-
-# =========================================================
-# 18. ADMIN PANEL
-# =========================================================
-
-@dp.message(Command("admin"))
-async def admin_command(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    await message.answer(
-        "🛠 <b>Admin panel</b>",
-        reply_markup=admin_keyboard()
-    )
-
-
-@dp.callback_query(F.data.startswith("a:"))
-async def admin_callbacks(call: CallbackQuery, state: FSMContext):
-    if not is_admin(call.from_user.id):
-        await call.answer("Siz admin emassiz!", show_alert=True)
-        return
-
-    action = call.data.split(":")[1]
-
-    if action == "close":
-        await call.message.delete()
-        return
-
-    if action == "stats":
-        users = await db_fetchone("SELECT COUNT(*) AS n FROM users")
-        orders = await db_fetchone("SELECT COUNT(*) AS n FROM orders")
-        pending = await db_fetchone(
-            "SELECT COUNT(*) AS n FROM orders WHERE status='pending'"
-        )
-        total = await db_fetchone(
-            "SELECT COALESCE(SUM(balance),0) AS n FROM users"
-        )
-
-        await call.message.answer(
-            "📊 <b>Statistika</b>\n\n"
-            f"👥 Foydalanuvchilar: {users['n']}\n"
-            f"📦 Buyurtmalar: {orders['n']}\n"
-            f"⏳ Kutilayotgan buyurtmalar: {pending['n']}\n"
-            f"⭐ Umumiy balans: {total['n']}"
-        )
-
-    elif action == "users":
-        await state.set_state(AdminState.search_user)
-        await call.message.answer(
-            "Foydalanuvchi ID yoki username yuboring:",
-            reply_markup=cancel_keyboard()
-        )
-
-    elif action == "orders":
-        rows = await db_fetchall("""
-            SELECT id,user_id,amount,status,created_at
-            FROM orders ORDER BY id DESC LIMIT 15
-        """)
-        if not rows:
-            await call.message.answer("Buyurtmalar yo‘q.")
-        else:
-            for row in rows:
-                kb = None
-                if row["status"] == "pending":
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(
-                            text="✅ Tasdiqlash",
-                            callback_data=f"order:approve:{row['id']}"
-                        ),
-                        InlineKeyboardButton(
-                            text="❌ Rad etish",
-                            callback_data=f"order:reject:{row['id']}"
-                        )
-                    ]])
-                await call.message.answer(
-                    f"📦 #{row['id']}\n"
-                    f"User: <code>{row['user_id']}</code>\n"
-                    f"Miqdor: {row['amount']} ⭐\n"
-                    f"Holat: {row['status']}\n"
-                    f"Vaqt: {row['created_at']}",
-                    reply_markup=kb
-                )
-
-    elif action == "promos":
-        await call.message.answer(
-            "🎁 Promokod yaratish uchun /addpromo buyrug‘idan foydalaning."
-        )
-
-    elif action == "channels":
-        await call.message.answer(
-            "📢 Kanal qo‘shish: /addchannel\n"
-            "Kanal o‘chirish: /delchannel ID"
-        )
-        channels = await db_fetchall("SELECT * FROM channels")
-        for ch in channels:
-            await call.message.answer(
-                f"#{ch['id']} — {ch['title']}\n"
-                f"ID: <code>{ch['chat_id']}</code>"
-            )
-
-    elif action == "broadcast":
-        await state.set_state(AdminState.broadcast)
-        await call.message.answer(
-            "Tarqatiladigan xabarni yuboring. Matn, rasm yoki video bo‘lishi mumkin:",
-            reply_markup=cancel_keyboard()
-        )
-
-    elif action == "tasks":
-        await call.message.answer(
-            "Vazifa yaratish: /addtask\n"
-            "Vazifalar ro‘yxati: /tasks"
-        )
-
-    elif action == "support":
-        rows = await db_fetchall("""
-            SELECT id,user_id,text,status FROM support_messages
-            WHERE status='new' ORDER BY id DESC LIMIT 15
-        """)
-        if not rows:
-            await call.message.answer("Yangi murojaatlar yo‘q.")
-        for row in rows:
-            await call.message.answer(
-                f"💬 #{row['id']}\n"
-                f"User: <code>{row['user_id']}</code>\n"
-                f"{row['text']}",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="✍️ Javob berish",
-                        callback_data=f"supportreply:{row['id']}"
-                    )
-                ]])
-            )
-
-    elif action == "news":
-        await state.set_state(AdminState.add_news)
-        await call.message.answer(
-            "Yangilik matnini yuboring:",
-            reply_markup=cancel_keyboard()
-        )
-
-    elif action == "rating":
-        rows = await db_fetchall("""
-            SELECT full_name,COUNT(*) AS refs
-            FROM users WHERE referrer_id IS NOT NULL
-            GROUP BY referrer_id ORDER BY refs DESC LIMIT 10
-        """)
-        text = "🏆 <b>Referal reytingi</b>\n"
-        for i, row in enumerate(rows, 1):
-            text += f"\n{i}. {row['full_name']} — {row['refs']}"
-        await call.message.answer(text)
-
-    elif action == "settings":
-        if not main_admin(call.from_user.id):
-            await call.answer(
-                "Bu bo‘lim faqat asosiy admin uchun.",
-                show_alert=True
-            )
-            return
-
-        await call.message.answer(
-            "⚙️ Sozlamalar:\n"
-            f"Referal mukofoti: {await get_setting('referral_reward')}\n"
-            f"Kunlik bonus: {await get_setting('daily_bonus')}\n\n"
-            "O‘zgartirish buyruqlari:\n"
-            "/setref soni\n"
-            "/setdaily soni\n"
-            "/setweekly soni"
-        )
-
-    await call.answer()
-
-
-# =========================================================
-# 19. ADMIN FOYDALANUVCHINI QIDIRISH
-# =========================================================
-
-@dp.message(AdminState.search_user)
-async def admin_search_user(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-
-    value = message.text.strip().replace("@", "")
-
-    if value.isdigit():
-        user = await db_fetchone(
-            "SELECT * FROM users WHERE user_id=?",
-            (int(value),)
-        )
+        text += "Hozircha yangilik yo‘q."
     else:
-        user = await db_fetchone(
-            "SELECT * FROM users WHERE username=? COLLATE NOCASE",
-            (value,)
-        )
+        for item, created in rows:
+            text += f"• {item}\n\n"
 
-    await state.clear()
-
-    if not user:
-        await message.answer("Foydalanuvchi topilmadi.")
-        return
-
-    await message.answer(
-        "👤 <b>Foydalanuvchi profili</b>\n\n"
-        f"Ism: {user['full_name']}\n"
-        f"Username: @{user['username'] or 'yo‘q'}\n"
-        f"ID: <code>{user['user_id']}</code>\n"
-        f"Balans: {user['balance']}\n"
-        f"Jami daromad: {user['total_earned']}\n"
-        f"Referer ID: {user['referrer_id']}\n"
-        f"Blok: {'Ha' if user['is_banned'] else 'Yo‘q'}\n"
-        f"Ro‘yxatdan o‘tgan: {user['created_at']}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="➕ Balans qo‘shish",
-                    callback_data=f"baladd:{user['user_id']}"
-                ),
-                InlineKeyboardButton(
-                    text="⛔ Bloklash",
-                    callback_data=f"ban:{user['user_id']}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔓 Blokdan chiqarish",
-                    callback_data=f"unban:{user['user_id']}"
-                )
-            ]
+    await safe_edit(
+        call, text,
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
         ])
     )
 
 
-@dp.callback_query(F.data.startswith("ban:"))
-async def ban_user(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
-
-    user_id = int(call.data.split(":")[1])
-    await db_execute(
-        "UPDATE users SET is_banned=1 WHERE user_id=?",
-        (user_id,)
+@dp.callback_query(F.data == "orders")
+async def orders_list(call: CallbackQuery):
+    rows = await fetchall(
+        "SELECT description, created FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 10",
+        (call.from_user.id,)
     )
-    await call.answer("Foydalanuvchi bloklandi.")
 
+    text = "📦 BUYURTMALARIM\n\n"
+    if not rows:
+        text += "Hozircha buyurtmalaringiz yo‘q."
+    else:
+        for description, created in rows:
+            text += f"• {description}\n"
 
-@dp.callback_query(F.data.startswith("unban:"))
-async def unban_user(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
-
-    user_id = int(call.data.split(":")[1])
-    await db_execute(
-        "UPDATE users SET is_banned=0 WHERE user_id=?",
-        (user_id,)
+    await safe_edit(
+        call, text,
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
     )
-    await call.answer("Blokdan chiqarildi.")
 
 
-@dp.callback_query(F.data.startswith("baladd:"))
-async def balance_add_start(call: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "guide")
+async def guide(call: CallbackQuery):
+    await safe_edit(
+        call,
+        "📖 QO‘LLANMA\n\n"
+        "1. Referal bo‘limidan havolangizni oling.\n"
+        "2. Do‘stlaringizni taklif qiling.\n"
+        "3. Topshiriqlarni bajaring.\n"
+        "4. Promo-kodlardan foydalaning.\n"
+        "5. Balans yetarli bo‘lsa Stars yechish so‘rovini yuboring.\n\n"
+        "Eslatma: botdagi Stars balansi ichki hisob birligidir.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
+    )
+
+
+@dp.callback_query(F.data == "settings")
+async def settings(call: CallbackQuery):
+    await safe_edit(
+        call,
+        "⚙️ SOZLAMALAR\n\n"
+        f"Telegram ID: {call.from_user.id}\n"
+        f"Username: @{call.from_user.username or 'yo‘q'}",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_home")]
+        ])
+    )
+
+
+# =========================================================
+# ADMIN PANELI
+# =========================================================
+
+@dp.callback_query(F.data == "a_stats")
+async def admin_stats(call: CallbackQuery):
     if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
-        return
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
 
-    user_id = int(call.data.split(":")[1])
-    await state.set_state(AdminState.balance_amount)
-    await state.update_data(target_user=user_id)
-    await call.message.answer("Qo‘shiladigan Stars miqdorini yuboring:")
+    users = await fetchone("SELECT COUNT(*) FROM users")
+    blocked = await fetchone("SELECT COUNT(*) FROM users WHERE blocked=1")
+    channels = await fetchone("SELECT COUNT(*) FROM channels")
+    pending = await fetchone("SELECT COUNT(*) FROM withdrawals WHERE status='pending'")
+    total_balance = await fetchone("SELECT COALESCE(SUM(balance),0) FROM users")
+
+    await safe_edit(
+        call,
+        "📊 BOT STATISTIKASI\n\n"
+        f"👥 Foydalanuvchilar: {users[0]}\n"
+        f"🚫 Bloklanganlar: {blocked[0]}\n"
+        f"📣 Kanallar: {channels[0]}\n"
+        f"💸 Kutilayotgan yechishlar: {pending[0]}\n"
+        f"⭐ Umumiy balans: {total_balance[0]}",
+        admin_menu(call.from_user.id)
+    )
+
+
+@dp.callback_query(F.data == "a_users")
+async def admin_users(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    rows = await fetchall(
+        "SELECT user_id, full_name, username, balance, blocked "
+        "FROM users ORDER BY joined DESC LIMIT 20"
+    )
+
+    text = "👥 OXIRGI FOYDALANUVCHILAR\n\n"
+    for row in rows:
+        text += (
+            f"ID: {row[0]}\n"
+            f"Ism: {row[1]}\n"
+            f"Username: @{row[2] or 'yo‘q'}\n"
+            f"Balans: {row[3]} ⭐\n"
+            f"Holat: {'Bloklangan' if row[4] else 'Faol'}\n\n"
+        )
+
+    await safe_edit(
+        call, text or "Foydalanuvchilar yo‘q.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_home")]
+        ])
+    )
+
+
+@dp.callback_query(F.data == "a_balance")
+async def admin_balance_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_balance)
+    await call.message.answer(
+        "Balansni o‘zgartirish uchun quyidagi shaklda yuboring:\n\n"
+        "<code>USER_ID MIQDOR</code>\n"
+        "Masalan: <code>123456789 10</code>\n"
+        "Manfiy miqdor balansdan ayiradi.",
+        parse_mode="HTML"
+    )
     await call.answer()
 
 
-@dp.message(AdminState.balance_amount)
-async def balance_add_finish(message: Message, state: FSMContext):
+@dp.message(AdminState.waiting_balance)
+async def admin_balance_change(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
 
-    if not message.text.isdigit() or int(message.text) <= 0:
-        await message.answer("Musbat butun son kiriting.")
-        return
-
-    data = await state.get_data()
-    ok = await change_balance(
-        data["target_user"],
-        int(message.text),
-        "admin_add",
-        f"Admin {message.from_user.id} qo‘shdi"
-    )
+    try:
+        user_id, amount = map(int, message.text.split())
+        if not await user_exists(user_id):
+            await message.answer("❌ Foydalanuvchi topilmadi.")
+        elif not await change_balance(user_id, amount, "Admin tomonidan o‘zgartirildi"):
+            await message.answer("❌ Balans manfiy bo‘lib qolishi mumkin emas.")
+        else:
+            await message.answer("✅ Balans yangilandi.")
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"💰 Balansingiz admin tomonidan o‘zgartirildi: {amount:+} Stars"
+                )
+            except Exception:
+                pass
+    except Exception:
+        await message.answer("❌ Format xato. Masalan: 123456789 10")
 
     await state.clear()
-    await message.answer(
-        "✅ Balans qo‘shildi." if ok else "❌ Amal bajarilmadi."
+
+
+@dp.callback_query(F.data == "a_channels")
+async def admin_channels(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    rows = await fetchall("SELECT id, chat_id, invite_link FROM channels")
+    text = "📣 KANALLAR\n\n"
+    for row in rows:
+        text += f"ID: {row[0]} | {row[1]}\n"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="a_add_channel")],
+        [InlineKeyboardButton(text="➖ Kanal o‘chirish", callback_data="a_del_channel")],
+        [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_home")]
+    ])
+
+    await safe_edit(call, text, keyboard)
+
+
+@dp.callback_query(F.data == "a_add_channel")
+async def add_channel_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_channel)
+    await call.message.answer(
+        "Kanal ma'lumotini yuboring:\n\n"
+        "<code>@kanal_username</code>\n"
+        "yoki\n"
+        "<code>-1001234567890 https://t.me/+invite</code>\n\n"
+        "Bot kanalga admin qilingan bo‘lishi kerak.",
+        parse_mode="HTML"
     )
+    await call.answer()
 
 
-# =========================================================
-# 20. ADMIN BUYRUQLARI
-# =========================================================
-
-@dp.message(Command("addchannel"))
-async def add_channel_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    await state.set_state(AdminState.add_channel)
-    await message.answer(
-        "Kanal ma’lumotini quyidagi ko‘rinishda yuboring:\n"
-        "<code>@username | Kanal nomi | https://t.me/username</code>"
-    )
-
-
-@dp.message(AdminState.add_channel)
+@dp.message(AdminState.waiting_channel)
 async def add_channel_finish(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
 
-    parts = [x.strip() for x in message.text.split("|")]
-    if len(parts) != 3:
-        await message.answer("Format xato. Qayta yuboring.")
-        return
-
-    chat_id, title, link = parts
+    parts = message.text.strip().split(maxsplit=1)
+    chat_id = parts[0]
+    invite = parts[1] if len(parts) > 1 else ""
 
     try:
         chat = await bot.get_chat(chat_id)
-        me = await bot.get_me()
-        member = await bot.get_chat_member(chat.id, me.id)
+        await bot.get_chat_member(chat.id, bot.id)
 
-        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-            await message.answer("Bot ushbu kanalda administrator bo‘lishi kerak.")
-            return
-
-        await db_execute("""
-            INSERT INTO channels(chat_id,title,invite_link)
-            VALUES(?,?,?)
-        """, (str(chat.id), title, link))
-
+        await execute(
+            "INSERT OR IGNORE INTO channels(chat_id, invite_link) VALUES(?,?)",
+            (chat_id, invite)
+        )
         await message.answer("✅ Kanal qo‘shildi.")
-        await state.clear()
-
-    except aiosqlite.IntegrityError:
-        await message.answer("Bu kanal oldin qo‘shilgan.")
-    except TelegramAPIError:
-        await message.answer("Kanalni tekshirib bo‘lmadi. Bot admin ekanini tekshiring.")
-
-
-@dp.message(Command("delchannel"))
-async def delete_channel(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    parts = message.text.split(maxsplit=1)
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /delchannel 1")
-        return
-
-    await db_execute("DELETE FROM channels WHERE id=?", (int(parts[1]),))
-    await message.answer("✅ Kanal o‘chirildi.")
-
-
-@dp.message(Command("addpromo"))
-async def add_promo_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    await state.set_state(AdminState.add_promo_code)
-    await message.answer("Promokod nomini yuboring:")
-
-
-@dp.message(AdminState.add_promo_code)
-async def add_promo_code(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-    await state.update_data(code=message.text.strip().upper())
-    await state.set_state(AdminState.add_promo_amount)
-    await message.answer("Necha Stars beriladi?")
-
-
-@dp.message(AdminState.add_promo_amount)
-async def add_promo_amount(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-    if not message.text.isdigit() or int(message.text) <= 0:
-        await message.answer("Musbat son kiriting.")
-        return
-    await state.update_data(amount=int(message.text))
-    await state.set_state(AdminState.add_promo_limit)
-    await message.answer("Foydalanish limiti. Cheksiz uchun 0 yuboring.")
-
-
-@dp.message(AdminState.add_promo_limit)
-async def add_promo_limit(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-    if not message.text.isdigit():
-        await message.answer("Butun son kiriting.")
-        return
-
-    data = await state.get_data()
-    try:
-        await db_execute("""
-            INSERT INTO promo_codes(code,amount,usage_limit)
-            VALUES(?,?,?)
-        """, (data["code"], data["amount"], int(message.text)))
-        await message.answer("✅ Promokod yaratildi.")
-    except aiosqlite.IntegrityError:
-        await message.answer("Bu promokod mavjud.")
-
-    await state.clear()
-
-
-@dp.message(Command("addtask"))
-async def add_task_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    await state.set_state(AdminState.add_task_title)
-    await message.answer("Vazifa nomini yuboring:")
-
-
-@dp.message(AdminState.add_task_title)
-async def add_task_title(message: Message, state: FSMContext):
-    await state.update_data(title=message.text)
-    await state.set_state(AdminState.add_task_link)
-    await message.answer("Vazifa havolasini yuboring:")
-
-
-@dp.message(AdminState.add_task_link)
-async def add_task_link(message: Message, state: FSMContext):
-    await state.update_data(link=message.text.strip())
-    await state.set_state(AdminState.add_task_reward)
-    await message.answer("Mukofot miqdorini Starsda kiriting:")
-
-
-@dp.message(AdminState.add_task_reward)
-async def add_task_reward(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-    if not message.text.isdigit() or int(message.text) <= 0:
-        await message.answer("Musbat son kiriting.")
-        return
-
-    data = await state.get_data()
-    await db_execute("""
-        INSERT INTO tasks(title,link,reward)
-        VALUES(?,?,?)
-    """, (data["title"], data["link"], int(message.text)))
-
-    await state.clear()
-    await message.answer("✅ Vazifa yaratildi.")
-
-
-@dp.message(Command("tasks"))
-async def admin_tasks(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    rows = await db_fetchall("SELECT * FROM tasks ORDER BY id DESC")
-    if not rows:
-        await message.answer("Vazifalar yo‘q.")
-        return
-    for row in rows:
+    except Exception as e:
+        log.warning("Channel add error: %s", e)
         await message.answer(
-            f"#{row['id']} — {row['title']}\n"
-            f"Mukofot: {row['reward']}\n"
-            f"Faol: {row['active']}"
+            "❌ Kanalni tekshirib bo‘lmadi. Kanal ID/username to‘g‘ri ekanini "
+            "va bot admin ekanini tekshiring."
         )
 
-
-@dp.message(Command("setref"))
-async def set_referral_reward(message: Message):
-    if not main_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /setref 2")
-        return
-    await set_setting("referral_reward", parts[1])
-    await message.answer("Referal mukofoti yangilandi.")
+    await state.clear()
 
 
-@dp.message(Command("setdaily"))
-async def set_daily_reward(message: Message):
-    if not main_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /setdaily 1")
-        return
-    await set_setting("daily_bonus", parts[1])
-    await message.answer("Kunlik bonus yangilandi.")
+@dp.callback_query(F.data == "a_del_channel")
+async def delete_channel_start(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
 
-
-@dp.message(Command("setweekly"))
-async def set_weekly_reward(message: Message):
-    if not main_admin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Foydalanish: /setweekly 5")
-        return
-    await set_setting("weekly_bonus", parts[1])
-    await message.answer("Haftalik bonus sozlandi.")
-
-
-# =========================================================
-# 21. REKLAMA TARQATISH
-# =========================================================
-
-@dp.message(AdminState.broadcast)
-async def broadcast_preview(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await state.clear()
-        return
-
-    await state.update_data(
-        source_chat=message.chat.id,
-        source_message=message.message_id
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="👥 Foydalanuvchilarga",
-                callback_data="bc:users"
-            ),
-            InlineKeyboardButton(
-                text="📢 Kanallarga",
-                callback_data="bc:channels"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="❌ Bekor qilish",
-                callback_data="cancel"
-            )
-        ]
+    rows = await fetchall("SELECT id, chat_id FROM channels")
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"🗑 {chat_id}",
+            callback_data=f"del_channel_{channel_id}"
+        )]
+        for channel_id, chat_id in rows
+    ]
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="a_channels")
     ])
 
-    await message.answer(
-        "📣 Reklama tayyor. Qayerga yuborilsin?",
-        reply_markup=kb
+    await safe_edit(
+        call, "O‘chirmoqchi bo‘lgan kanalni tanlang:",
+        InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
 
-@dp.callback_query(F.data.startswith("bc:"))
-async def broadcast_send(call: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("del_channel_"))
+async def delete_channel(call: CallbackQuery):
     if not is_admin(call.from_user.id):
-        await call.answer("Ruxsat yo‘q.", show_alert=True)
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    channel_id = int(call.data.split("_")[-1])
+    await execute("DELETE FROM channels WHERE id=?", (channel_id,))
+    await call.answer("Kanal o‘chirildi.")
+    await admin_channels(call)
+
+
+@dp.callback_query(F.data == "a_broadcast")
+async def broadcast_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_broadcast)
+    await call.message.answer(
+        "📢 Tarqatiladigan xabarni yuboring.\n"
+        "Matn, rasm, video yoki boshqa Telegram xabarini yuborishingiz mumkin.\n"
+        "Xabar foydalanuvchilarga va qo‘shilgan kanallarga nusxalanadi."
+    )
+    await call.answer()
+
+
+@dp.message(AdminState.waiting_broadcast)
+async def broadcast_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
         return
 
-    target = call.data.split(":")[1]
-    data = await state.get_data()
+    users = await fetchall("SELECT user_id FROM users WHERE blocked=0")
+    channels = await fetchall("SELECT chat_id FROM channels")
 
-    if not data.get("source_message"):
-        await call.answer("Reklama xabari topilmadi.", show_alert=True)
-        return
-
-    if target == "users":
-        recipients = await db_fetchall(
-            "SELECT user_id FROM users WHERE is_banned=0"
-        )
-        ids = [x["user_id"] for x in recipients]
-    else:
-        channels = await db_fetchall(
-            "SELECT chat_id FROM channels WHERE active=1"
-        )
-        ids = [x["chat_id"] for x in channels]
-
-    success = 0
+    sent = 0
     failed = 0
 
-    status = await call.message.answer("⏳ Reklama tarqatilmoqda...")
+    await message.answer(
+        f"⏳ Tarqatish boshlandi.\n"
+        f"Foydalanuvchilar: {len(users)}\nKanallar: {len(channels)}"
+    )
 
-    for target_id in ids:
+    for (user_id,) in users:
         try:
             await bot.copy_message(
-                chat_id=target_id,
-                from_chat_id=data["source_chat"],
-                message_id=data["source_message"]
+                chat_id=user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
             )
-            success += 1
-        except TelegramAPIError:
+            sent += 1
+        except (TelegramForbiddenError, TelegramBadRequest):
+            failed += 1
+        except Exception:
+            failed += 1
+
+    for (chat_id,) in channels:
+        try:
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+            sent += 1
+        except Exception:
             failed += 1
 
         await asyncio.sleep(0.05)
 
-    await db_execute("""
-        INSERT INTO broadcasts(admin_id,target,success,failed,created_at)
-        VALUES(?,?,?,?,?)
-    """, (call.from_user.id, target, success, failed, now()))
-
-    await status.edit_text(
-        "✅ <b>Reklama yakunlandi</b>\n\n"
-        f"Yuborildi: {success}\n"
+    await message.answer(
+        f"✅ Tarqatish yakunlandi.\n"
+        f"Yuborildi: {sent}\n"
         f"Xatolik: {failed}"
     )
-
     await state.clear()
-    await call.answer()
 
 
-# =========================================================
-# 22. BEKOR QILISH
-# =========================================================
+@dp.callback_query(F.data == "a_promo")
+async def admin_promo_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
 
-@dp.callback_query(F.data == "cancel")
-async def cancel_callback(call: CallbackQuery, state: FSMContext):
-    await state.clear()
+    await state.set_state(AdminState.waiting_promo_create)
     await call.message.answer(
-        "❌ Jarayon bekor qilindi.",
-        reply_markup=user_keyboard() if not is_admin(call.from_user.id) else None
+        "Promo yaratish formati:\n\n"
+        "<code>KOD MUKOFOT LIMIT</code>\n"
+        "Masalan: <code>START10 10 100</code>\n\n"
+        "Promo muddati hozircha cheklanmaydi.",
+        parse_mode="HTML"
     )
     await call.answer()
 
 
-@dp.message(Command("cancel"))
-async def cancel_command(message: Message, state: FSMContext):
+@dp.message(AdminState.waiting_promo_create)
+async def admin_promo_create(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    try:
+        code, reward, limit = message.text.upper().split()
+        reward, limit = int(reward), int(limit)
+
+        if not re.fullmatch(r"[A-Z0-9_-]{3,30}", code):
+            raise ValueError()
+
+        if reward <= 0 or limit <= 0:
+            raise ValueError()
+
+        await execute(
+            "INSERT INTO promos(code, reward, max_uses) VALUES(?,?,?)",
+            (code, reward, limit)
+        )
+        await message.answer(
+            f"✅ Promo yaratildi!\n"
+            f"Kod: {code}\nMukofot: {reward} Stars\nLimit: {limit}"
+        )
+    except aiosqlite.IntegrityError:
+        await message.answer("❌ Bu promo-kod oldin yaratilgan.")
+    except Exception:
+        await message.answer("❌ Format xato. Masalan: START10 10 100")
+
     await state.clear()
-    await message.answer(
-        "❌ Jarayon bekor qilindi.",
-        reply_markup=user_keyboard()
+
+
+@dp.callback_query(F.data == "a_task")
+async def admin_task_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_task)
+    await call.message.answer(
+        "Topshiriq formati:\n\n"
+        "<code>NOMI | LINK | MUKOFOT</code>\n"
+        "Masalan:\n"
+        "<code>Kanalga obuna | https://t.me/example | 5</code>",
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+
+@dp.message(AdminState.waiting_task)
+async def admin_task_create(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    try:
+        title, link, reward = [x.strip() for x in message.text.split("|")]
+        reward = int(reward)
+
+        if not link.startswith(("https://", "http://")) or reward <= 0:
+            raise ValueError()
+
+        await execute(
+            "INSERT INTO tasks(title, link, reward) VALUES(?,?,?)",
+            (title, link, reward)
+        )
+        await message.answer("✅ Topshiriq qo‘shildi.")
+    except Exception:
+        await message.answer(
+            "❌ Format xato. Misol:\n"
+            "Kanalga obuna | https://t.me/example | 5"
+        )
+
+    await state.clear()
+
+
+@dp.callback_query(F.data == "a_news")
+async def admin_news_start(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await state.set_state(AdminState.waiting_news)
+    await call.message.answer("📰 Yangilik matni yoki media xabarini yuboring:")
+    await call.answer()
+
+
+@dp.message(AdminState.waiting_news)
+async def admin_news_save(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    content = message.text or message.caption or "[Media yangilik]"
+    await execute(
+        "INSERT INTO news(text, created) VALUES(?,?)",
+        (content, datetime.now().isoformat())
+    )
+
+    users = await fetchall("SELECT user_id FROM users WHERE blocked=0")
+    sent = 0
+
+    for (user_id,) in users:
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+            sent += 1
+        except Exception:
+            pass
+
+    await message.answer(f"✅ Yangilik saqlandi. {sent} foydalanuvchiga yuborildi.")
+    await state.clear()
+
+
+@dp.callback_query(F.data == "a_withdrawals")
+async def admin_withdrawals(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    rows = await fetchall(
+        "SELECT id, user_id, amount, created FROM withdrawals "
+        "WHERE status='pending' ORDER BY id DESC LIMIT 20"
+    )
+
+    text = "💸 KUTILAYOTGAN SO‘ROVLAR\n\n"
+    buttons = []
+
+    for request_id, user_id, amount, created in rows:
+        text += f"#{request_id} | {user_id} | {amount} Stars\n"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"Ko‘rish #{request_id}",
+                callback_data=f"wd_view_{request_id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_home")
+    ])
+
+    await safe_edit(
+        call, text if rows else "Kutilayotgan so‘rovlar yo‘q.",
+        InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@dp.callback_query(F.data.startswith("wd_view_"))
+async def admin_withdraw_view(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    request_id = int(call.data.split("_")[-1])
+    row = await fetchone(
+        "SELECT user_id, amount, status FROM withdrawals WHERE id=?",
+        (request_id,)
+    )
+
+    if not row:
+        return await call.answer("So‘rov topilmadi.", show_alert=True)
+
+    await safe_edit(
+        call,
+        f"💸 SO‘ROV #{request_id}\n\n"
+        f"Foydalanuvchi: {row[0]}\n"
+        f"Miqdor: {row[1]} Stars\n"
+        f"Holat: {row[2]}",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"wd_ok_{request_id}"),
+                InlineKeyboardButton(text="❌ Rad etish", callback_data=f"wd_no_{request_id}")
+            ],
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="a_withdrawals")]
+        ])
+    )
+
+
+@dp.callback_query(F.data == "a_support")
+async def admin_support_list(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    rows = await fetchall(
+        "SELECT id, user_id, message FROM support ORDER BY id DESC LIMIT 15"
+    )
+
+    text = "📨 OXIRGI MUROJAATLAR\n\n"
+    buttons = []
+
+    for support_id, user_id, content in rows:
+        text += f"#{support_id} | {user_id}: {content[:80]}\n"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"Javob berish: {user_id}",
+                callback_data=f"reply_{user_id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_home")
+    ])
+
+    await safe_edit(
+        call, text if rows else "Murojaatlar mavjud emas.",
+        InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@dp.callback_query(F.data == "a_settings")
+async def admin_settings(call: CallbackQuery):
+    if not is_main_admin(call.from_user.id):
+        return await call.answer("Faqat asosiy admin uchun.", show_alert=True)
+
+    await safe_edit(
+        call,
+        "⚙️ ASOSIY ADMIN SOZLAMALARI\n\n"
+        f"Referal mukofoti: {REFERRAL_REWARD} Stars\n"
+        f"Asosiy admin: {ADMIN_ID_1}\n"
+        f"Ikkinchi admin: {ADMIN_ID_2 or 'Belgilanmagan'}\n\n"
+        "Referal miqdorini Render Environment dagi "
+        "REFERRAL_REWARD orqali o‘zgartiring.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_home")]
+        ])
+    )
+
+
+@dp.callback_query(F.data == "admin_home")
+async def admin_home(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("Ruxsat yo‘q.", show_alert=True)
+
+    await safe_edit(
+        call, "🛠 ADMIN PANEL",
+        admin_menu(call.from_user.id)
     )
 
 
 # =========================================================
-# 23. BLOKLANGAN FOYDALANUVCHILARNI CHEKLASH
+# BLOKLASH VA UMUMIY XATOLARNI USHLASH
 # =========================================================
 
 @dp.message()
-async def fallback_handler(message: Message):
-    if is_admin(message.from_user.id):
-        return
+async def fallback_message(message: Message):
+    if not await user_exists(message.from_user.id):
+        await register_user(message)
 
-    user = await db_fetchone(
-        "SELECT is_banned FROM users WHERE user_id=?",
-        (message.from_user.id,)
-    )
-
-    if user and user["is_banned"]:
-        await message.answer("⛔ Siz bloklangansiz.")
+    if not await allowed_user(message.from_user.id, message):
         return
 
     await message.answer(
-        "Menyudagi tugmalardan foydalaning.",
-        reply_markup=user_keyboard()
+        "Menyudan kerakli bo‘limni tanlang:",
+        reply_markup=main_menu()
     )
 
 
+@dp.callback_query()
+async def fallback_callback(call: CallbackQuery):
+    await call.answer("Bu tugma mavjud emas yoki eskirgan.", show_alert=True)
+
+
 # =========================================================
-# 24. HEALTH CHECK — RENDER
+# RENDER HEALTH CHECK
 # =========================================================
 
 async def health(request):
@@ -2034,38 +1763,28 @@ async def start_web_server():
     await site.start()
 
     log.info("Health server started on port %s", PORT)
-    return runner
 
 
 # =========================================================
-# 25. ISHGA TUSHIRISH
+# ISHGA TUSHIRISH
 # =========================================================
 
 async def main():
     await init_db()
 
-    # Admin ID larni bazada ro'yxatga olish
-    await db_execute(
-        "INSERT OR IGNORE INTO admins(user_id,role) VALUES(?,?)",
-        (ADMIN_ID_1, "main")
-    )
-    await db_execute(
-        "INSERT OR IGNORE INTO admins(user_id,role) VALUES(?,?)",
-        (ADMIN_ID_2, "secondary")
-    )
+    await start_web_server()
 
-    runner = await start_web_server()
+    me = await bot.get_me()
+    log.info("Bot started: @%s", me.username)
 
-    try:
-        log.info("Bot ishga tushmoqda...")
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types()
-        )
-    finally:
-        await runner.cleanup()
-        await bot.session.close()
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Bot stopped")
