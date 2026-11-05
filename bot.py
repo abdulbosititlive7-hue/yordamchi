@@ -10,19 +10,21 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+
 from aiogram.types import (
     Message, CallbackQuery,
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile
 )
+
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 
-# ==================================================
+# =========================================
 # SOZLAMALAR
-# ==================================================
+# =========================================
 
 BOT_TOKEN = "9269203317:AAFCoXtE8EHT9IR5HGhLtFPzG_qkyf6sFDo"
 
@@ -31,103 +33,42 @@ ADMIN_ID_2 = 7676544759
 
 DB_NAME = "stars.db"
 
+GIFT_PRICES = [15, 25]
+
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(
     BOT_TOKEN,
-    default=DefaultBotProperties(
-        parse_mode=ParseMode.HTML
-    )
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
 dp = Dispatcher(storage=MemoryStorage())
 
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID_1 or user_id == ADMIN_ID_2
+def is_admin(uid):
+    return uid == ADMIN_ID_1 or uid == ADMIN_ID_2
 
 
-# ==================================================
+# =========================================
 # HOLATLAR
-# ==================================================
+# =========================================
 
 class Form(StatesGroup):
-    channel_add = State()
-    channel_remove = State()
+    add_channel = State()
+    remove_channel = State()
+    referral_reward = State()
     promo_create = State()
     promo_use = State()
-    search = State()
-    stars_add = State()
-    stars_remove = State()
-    reward = State()
     broadcast = State()
-    channel_message = State()
-    schedule_time = State()
-    schedule_text = State()
+    search_user = State()
+    add_stars = State()
+    remove_stars = State()
     topup = State()
 
 
-# ==================================================
-# ADMIN MENYUSI
-# ==================================================
-
-def admin_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="👥 Foydalanuvchilar"),
-                KeyboardButton(text="📊 Statistika")
-            ],
-            [
-                KeyboardButton(text="🔎 Qidirish"),
-                KeyboardButton(text="🔗 Referallar")
-            ],
-            [
-                KeyboardButton(text="📢 Reklama tarqatish"),
-                KeyboardButton(text="📣 Kanallarga xabar")
-            ],
-            [
-                KeyboardButton(text="⏰ Rejalashtirish"),
-                KeyboardButton(text="🎟 Promokod yaratish")
-            ],
-            [
-                KeyboardButton(text="📋 Promokodlar"),
-                KeyboardButton(text="💾 Baza zaxirasi")
-            ],
-            [
-                KeyboardButton(text="🚫 Ban / Unban qilish")
-            ],
-            [
-                KeyboardButton(text="💰 Pul qo'shish"),
-                KeyboardButton(text="💸 Pul ayirish")
-            ],
-            [
-                KeyboardButton(text="⭐ Stars qo'shish"),
-                KeyboardButton(text="📉 Stars ayirish")
-            ],
-            [
-                KeyboardButton(text="➕ Kanal qo'shish"),
-                KeyboardButton(text="🗑 Kanalni o'chirish")
-            ],
-            [
-                KeyboardButton(text="📡 Kanallar ro'yxati"),
-                KeyboardButton(text="🎁 Gift so'rovlari")
-            ],
-            [
-                KeyboardButton(text="⚙️ Referal sozlamasi")
-            ],
-            [
-                KeyboardButton(text="🏠 Asosiy menyu")
-            ]
-        ],
-        resize_keyboard=True,
-        persistent=True
-    )
-
-
-# ==================================================
-# FOYDALANUVCHI MENYUSI
-# ==================================================
+# =========================================
+# MENYULAR
+# =========================================
 
 def user_menu():
     return ReplyKeyboardMarkup(
@@ -137,28 +78,24 @@ def user_menu():
                 KeyboardButton(text="🎁 Gift yechish")
             ],
             [
-                KeyboardButton(text="📦 Buyurtmalar"),
-                KeyboardButton(text="👤 Mening hisobim")
+                KeyboardButton(text="👤 Mening hisobim"),
+                KeyboardButton(text="📦 Buyurtmalar")
             ],
             [
-                KeyboardButton(text="🗣 Referal"),
-                KeyboardButton(text="💰 Hisob to'ldirish")
-            ],
-            [
-                KeyboardButton(text="🎟 Promokod"),
+                KeyboardButton(text="👥 Referal"),
                 KeyboardButton(text="🏆 TOP referal")
             ],
             [
-                KeyboardButton(text="☎️ Murojaat"),
+                KeyboardButton(text="🎟 Promokod"),
+                KeyboardButton(text="💰 Hisob to'ldirish")
+            ],
+            [
+                KeyboardButton(text="🎰 777 Slot"),
+                KeyboardButton(text="📊 Statistika")
+            ],
+            [
+                KeyboardButton(text="☎️ Yordam"),
                 KeyboardButton(text="📚 Qo'llanma")
-            ],
-            [
-                KeyboardButton(text="🎰 Open"),
-                KeyboardButton(text="📊 Son")
-            ],
-            [
-                KeyboardButton(text="ℹ️ Ma'lumot"),
-                KeyboardButton(text="🌐 Til")
             ]
         ],
         resize_keyboard=True,
@@ -166,9 +103,54 @@ def user_menu():
     )
 
 
-# ==================================================
+def admin_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="👥 Foydalanuvchilar"),
+                KeyboardButton(text="📊 Statistika")
+            ],
+            [
+                KeyboardButton(text="🔎 Foydalanuvchi qidirish"),
+                KeyboardButton(text="🔗 Referallar")
+            ],
+            [
+                KeyboardButton(text="⭐ Stars qo'shish"),
+                KeyboardButton(text="📉 Stars ayirish")
+            ],
+            [
+                KeyboardButton(text="🚫 Ban / Unban"),
+                KeyboardButton(text="📢 Reklama")
+            ],
+            [
+                KeyboardButton(text="➕ Kanal qo'shish"),
+                KeyboardButton(text="➖ Kanal o'chirish")
+            ],
+            [
+                KeyboardButton(text="📡 Kanallar"),
+                KeyboardButton(text="🎁 Gift buyurtmalari")
+            ],
+            [
+                KeyboardButton(text="🎟 Promo yaratish"),
+                KeyboardButton(text="📋 Promokodlar")
+            ],
+            [
+                KeyboardButton(text="⚙️ Referal sozlamasi"),
+                KeyboardButton(text="💾 Baza")
+            ],
+            [
+                KeyboardButton(text="💳 Hisob so'rovlari"),
+                KeyboardButton(text="🏠 Asosiy menyu")
+            ]
+        ],
+        resize_keyboard=True,
+        persistent=True
+    )
+
+
+# =========================================
 # DATABASE
-# ==================================================
+# =========================================
 
 async def db_init():
     async with aiosqlite.connect(DB_NAME) as db:
@@ -176,13 +158,22 @@ async def db_init():
         await db.execute("""
         CREATE TABLE IF NOT EXISTS users(
             user_id INTEGER PRIMARY KEY,
-            username TEXT,
+            username TEXT DEFAULT '',
             stars INTEGER DEFAULT 0,
             referrer INTEGER DEFAULT 0,
             banned INTEGER DEFAULT 0,
             created TEXT
         )
         """)
+
+        # Eski bazaga first_name ustunini qo'shish
+        async with db.execute("PRAGMA table_info(users)") as cur:
+            columns = [r[1] for r in await cur.fetchall()]
+
+        if "first_name" not in columns:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN first_name TEXT DEFAULT ''"
+            )
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS channels(
@@ -201,6 +192,16 @@ async def db_init():
         """)
 
         await db.execute("""
+        CREATE TABLE IF NOT EXISTS gifts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            stars INTEGER,
+            status TEXT DEFAULT 'pending',
+            created TEXT
+        )
+        """)
+
+        await db.execute("""
         CREATE TABLE IF NOT EXISTS promos(
             code TEXT PRIMARY KEY,
             stars INTEGER,
@@ -214,16 +215,6 @@ async def db_init():
             user_id INTEGER,
             code TEXT,
             UNIQUE(user_id,code)
-        )
-        """)
-
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS gifts(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            stars INTEGER,
-            status TEXT DEFAULT 'pending',
-            created TEXT
         )
         """)
 
@@ -261,11 +252,11 @@ async def db_init():
         await db.commit()
 
 
-# ==================================================
-# YORDAMCHI
-# ==================================================
+# =========================================
+# YORDAMCHI FUNKSIYALAR
+# =========================================
 
-async def setting(name):
+async def get_setting(name):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
             "SELECT value FROM settings WHERE name=?",
@@ -277,14 +268,14 @@ async def setting(name):
 
 async def set_setting(name, value):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO settings VALUES(?,?)",
-            (name, str(value))
-        )
+        await db.execute("""
+        INSERT OR REPLACE INTO settings(name,value)
+        VALUES(?,?)
+        """, (name, str(value)))
         await db.commit()
 
 
-async def balance(uid):
+async def get_balance(uid):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
             "SELECT stars FROM users WHERE user_id=?",
@@ -317,8 +308,7 @@ async def change_stars(uid, amount, reason):
         INSERT INTO transactions(user_id,amount,reason,created)
         VALUES(?,?,?,?)
         """, (
-            uid, amount, reason,
-            datetime.now().isoformat()
+            uid, amount, reason, datetime.now().isoformat()
         ))
 
         await db.commit()
@@ -336,10 +326,14 @@ async def register(message, referrer=0):
             exists = await cur.fetchone()
 
         if exists:
-            await db.execute(
-                "UPDATE users SET username=? WHERE user_id=?",
-                (message.from_user.username or "", uid)
-            )
+            await db.execute("""
+            UPDATE users SET username=?,first_name=?
+            WHERE user_id=?
+            """, (
+                message.from_user.username or "",
+                message.from_user.first_name or "",
+                uid
+            ))
         else:
             if referrer == uid:
                 referrer = 0
@@ -355,20 +349,22 @@ async def register(message, referrer=0):
 
             await db.execute("""
             INSERT INTO users(
-                user_id,username,stars,referrer,banned,created
+                user_id,username,stars,referrer,
+                banned,created,first_name
             )
-            VALUES(?,?,0,?,0,?)
+            VALUES(?,?,0,?,0,?,?)
             """, (
                 uid,
                 message.from_user.username or "",
                 referrer,
-                datetime.now().isoformat()
+                datetime.now().isoformat(),
+                message.from_user.first_name or ""
             ))
 
         await db.commit()
 
 
-async def channels():
+async def get_channels():
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
             "SELECT channel FROM channels"
@@ -376,12 +372,12 @@ async def channels():
             return await cur.fetchall()
 
 
-# ==================================================
-# OBUNA TEKSHIRISH
-# ==================================================
+# =========================================
+# KANAL OBUNASI
+# =========================================
 
-async def subscribed(uid):
-    for (channel,) in await channels():
+async def check_subscription(uid):
+    for (channel,) in await get_channels():
         try:
             member = await bot.get_chat_member(channel, uid)
 
@@ -389,23 +385,24 @@ async def subscribed(uid):
                 return False
 
         except Exception:
-            logging.exception("Kanal tekshirish xatosi")
+            logging.exception("Obuna tekshirish xatosi")
             return False
 
     return True
 
 
-async def subscription_keyboard():
+async def subscription_buttons():
     rows = []
 
-    for (channel,) in await channels():
+    for (channel,) in await get_channels():
         try:
             chat = await bot.get_chat(channel)
 
-            if channel.startswith("@"):
-                link = "https://t.me/" + channel[1:]
-            else:
-                link = channel
+            link = (
+                "https://t.me/" + channel[1:]
+                if channel.startswith("@")
+                else channel
+            )
 
             rows.append([
                 InlineKeyboardButton(
@@ -418,15 +415,15 @@ async def subscription_keyboard():
 
     rows.append([
         InlineKeyboardButton(
-            text="✅ Tekshirish",
-            callback_data="check_subscription"
+            text="✅ Obunani tekshirish",
+            callback_data="check_sub"
         )
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def allowed(message):
+async def check_user(message):
     uid = message.from_user.id
 
     if is_admin(uid):
@@ -443,21 +440,21 @@ async def allowed(message):
         await message.answer("🚫 Siz bloklangansiz.")
         return False
 
-    if not await subscribed(uid):
+    if not await check_subscription(uid):
         await message.answer(
-            "📢 Avval kanallarga obuna bo'ling.",
-            reply_markup=await subscription_keyboard()
+            "📢 Botdan foydalanish uchun kanallarga obuna bo'ling.",
+            reply_markup=await subscription_buttons()
         )
         return False
 
     return True
 
 
-# ==================================================
-# REFERAL
-# ==================================================
+# =========================================
+# REFERAL MUKOFOTI
+# =========================================
 
-async def referral_reward(uid):
+async def give_referral_reward(uid):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("BEGIN IMMEDIATE")
 
@@ -483,7 +480,7 @@ async def referral_reward(uid):
             await db.rollback()
             return
 
-        reward = int(await setting("referral_reward"))
+        reward = int(await get_setting("referral_reward"))
 
         await db.execute("""
         INSERT INTO referrals(referrer,invited,reward,active)
@@ -525,7 +522,7 @@ async def referral_monitor():
                     rows = await cur.fetchall()
 
             for uid, ref, reward in rows:
-                if not await subscribed(uid):
+                if not await check_subscription(uid):
                     async with aiosqlite.connect(DB_NAME) as db:
                         await db.execute("BEGIN IMMEDIATE")
 
@@ -536,11 +533,12 @@ async def referral_monitor():
                             row = await cur.fetchone()
 
                         if row:
-                            new_balance = max(0, row[0] - reward)
+                            # Balansni manfiy qilmaslik
+                            deduction = min(row[0], reward)
 
                             await db.execute(
-                                "UPDATE users SET stars=? WHERE user_id=?",
-                                (new_balance, ref)
+                                "UPDATE users SET stars=stars-? WHERE user_id=?",
+                                (deduction, ref)
                             )
 
                             await db.execute("""
@@ -548,7 +546,7 @@ async def referral_monitor():
                                 user_id,amount,reason,created
                             ) VALUES(?,?,?,?)
                             """, (
-                                ref, -reward,
+                                ref, -deduction,
                                 "Referal obunadan chiqdi",
                                 datetime.now().isoformat()
                             ))
@@ -564,22 +562,22 @@ async def referral_monitor():
                             await bot.send_message(
                                 ref,
                                 f"⚠️ Referalingiz obunadan chiqdi.\n"
-                                f"⭐ {reward} Stars bekor qilindi."
+                                f"⭐ {deduction if row else 0} Stars bekor qilindi."
                             )
                         except Exception:
                             pass
 
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
         except Exception:
-            logging.exception("Referal tekshirish xatosi")
+            logging.exception("Referal monitoring xatosi")
 
         await asyncio.sleep(600)
 
 
-# ==================================================
+# =========================================
 # START
-# ==================================================
+# =========================================
 
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
@@ -603,28 +601,26 @@ async def start(message: Message, state: FSMContext):
         )
         return
 
-    if not await subscribed(message.from_user.id):
+    if not await check_subscription(message.from_user.id):
         await message.answer(
-            "👋 Botga xush kelibsiz!\n"
-            "Avval kanallarga obuna bo'ling.",
-            reply_markup=await subscription_keyboard()
+            "📢 Avval kanallarga obuna bo'ling.",
+            reply_markup=await subscription_buttons()
         )
         return
 
-    await referral_reward(message.from_user.id)
+    await give_referral_reward(message.from_user.id)
 
     await message.answer(
-        "👋 Assalomu alaykum!\n"
-        "⭐ STARS BOT ga xush kelibsiz!",
+        "👋 STARS BOT ga xush kelibsiz!",
         reply_markup=user_menu()
     )
 
 
-@dp.callback_query(F.data == "check_subscription")
-async def check_sub(call: CallbackQuery):
-    if await subscribed(call.from_user.id):
+@dp.callback_query(F.data == "check_sub")
+async def check_sub_callback(call: CallbackQuery):
+    if await check_subscription(call.from_user.id):
         if not is_admin(call.from_user.id):
-            await referral_reward(call.from_user.id)
+            await give_referral_reward(call.from_user.id)
 
         await call.message.answer(
             "✅ Obuna tasdiqlandi!",
@@ -642,13 +638,13 @@ async def check_sub(call: CallbackQuery):
         )
 
 
-# ==================================================
+# =========================================
 # FOYDALANUVCHI: STARS
-# ==================================================
+# =========================================
 
 @dp.message(F.text == "⭐ Stars olish")
 async def stars_get(message: Message):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
     me = await bot.get_me()
@@ -658,26 +654,37 @@ async def stars_get(message: Message):
         "⭐ <b>STARS OLISH</b>\n\n"
         "Do'stlaringizni taklif qiling.\n\n"
         f"🔗 <code>{link}</code>\n\n"
-        f"Har bir referal: {await setting('referral_reward')} Stars"
+        f"Har bir referal: {await get_setting('referral_reward')} Stars"
     )
 
 
 @dp.message(F.text == "👤 Mening hisobim")
-async def my_account(message: Message):
-    if not await allowed(message):
+async def account(message: Message):
+    if not await check_user(message):
         return
+
+    uid = message.from_user.id
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referrer=? AND active=1",
+            (uid,)
+        ) as cur:
+            refs = (await cur.fetchone())[0]
 
     await message.answer(
         "👤 <b>MENING HISOBIM</b>\n\n"
-        f"🆔 ID: <code>{message.from_user.id}</code>\n"
-        f"⭐ Stars: <b>{await balance(message.from_user.id)}</b>\n"
-        f"👤 Username: @{message.from_user.username or 'yoq'}"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"👤 Ism: {message.from_user.first_name}\n"
+        f"Username: @{message.from_user.username or 'Mavjud emas'}\n"
+        f"⭐ Stars: <b>{await get_balance(uid)}</b>\n"
+        f"👥 Faol referallar: {refs}"
     )
 
 
-@dp.message(F.text == "🗣 Referal")
-async def my_referral(message: Message):
-    if not await allowed(message):
+@dp.message(F.text == "👥 Referal")
+async def referral(message: Message):
+    if not await check_user(message):
         return
 
     uid = message.from_user.id
@@ -692,125 +699,206 @@ async def my_referral(message: Message):
             count, earned = await cur.fetchone()
 
     await message.answer(
-        "🔗 <b>REFERAL</b>\n\n"
-        f"Havolangiz:\n<code>{link}</code>\n\n"
+        "🔗 <b>REFERAL BO'LIMI</b>\n\n"
+        f"Havola:\n<code>{link}</code>\n\n"
         f"👥 Referallar: {count}\n"
-        f"⭐ Jami mukofot: {earned}"
+        f"⭐ Mukofotlar: {earned} Stars"
     )
 
 
 @dp.message(F.text == "🏆 TOP referal")
-async def top_ref(message: Message):
-    if not await allowed(message):
+async def top_referral(message: Message):
+    if not await check_user(message):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("""
-        SELECT u.username,COUNT(r.id)
+        SELECT u.user_id,u.first_name,u.username,COUNT(r.id)
         FROM users u
         LEFT JOIN referrals r
         ON u.user_id=r.referrer AND r.active=1
         GROUP BY u.user_id
-        ORDER BY COUNT(r.id) DESC LIMIT 10
+        ORDER BY COUNT(r.id) DESC
+        LIMIT 10
         """) as cur:
             rows = await cur.fetchall()
 
     text = "🏆 <b>TOP REFERAL</b>\n\n"
 
-    for i, (username, count) in enumerate(rows, 1):
-        text += f"{i}. @{username or 'user'} — {count}\n"
+    for i, (uid, name, username, count) in enumerate(rows, 1):
+        label = name or username or str(uid)
+        text += f"{i}. {label} — {count} ta\n"
 
     await message.answer(text)
 
 
-# ==================================================
-# FOYDALANUVCHI: GIFT
-# ==================================================
+# =========================================
+# GIFT TIZIMI
+# FAQAT 15 VA 25 STARS
+# =========================================
 
 @dp.message(F.text == "🎁 Gift yechish")
 async def gift_menu(message: Message):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
             [
-                KeyboardButton(text="🎁 15 Stars Gift"),
-                KeyboardButton(text="🎁 25 Stars Gift")
+                InlineKeyboardButton(
+                    text="🎁 15 Stars Gift",
+                    callback_data="gift_order:15"
+                )
             ],
             [
-                KeyboardButton(text="🎁 50 Stars Gift"),
-                KeyboardButton(text="🎁 100 Stars Gift")
-            ],
-            [
-                KeyboardButton(text="⬅️ Orqaga")
+                InlineKeyboardButton(
+                    text="🎁 25 Stars Gift",
+                    callback_data="gift_order:25"
+                )
             ]
-        ],
-        resize_keyboard=True,
-        persistent=True
+        ]
     )
 
     await message.answer(
-        "🎁 Gift miqdorini tanlang:",
+        "🎁 <b>GIFT BUYURTMA</b>\n\n"
+        f"⭐ Balansingiz: {await get_balance(message.from_user.id)} Stars\n\n"
+        "Kerakli giftni tanlang:",
         reply_markup=kb
     )
 
 
-@dp.message(F.text.in_([
-    "🎁 15 Stars Gift",
-    "🎁 25 Stars Gift",
-    "🎁 50 Stars Gift",
-    "🎁 100 Stars Gift"
-]))
-async def gift_order(message: Message):
-    if not await allowed(message):
+@dp.callback_query(F.data.startswith("gift_order:"))
+async def gift_order(call: CallbackQuery):
+    uid = call.from_user.id
+
+    if is_admin(uid):
+        pass
+    else:
+        async with aiosqlite.connect(DB_NAME) as db:
+            async with db.execute(
+                "SELECT banned FROM users WHERE user_id=?",
+                (uid,)
+            ) as cur:
+                row = await cur.fetchone()
+
+        if row and row[0]:
+            await call.answer("Siz bloklangansiz.", show_alert=True)
+            return
+
+        if not await check_subscription(uid):
+            await call.message.answer(
+                "📢 Avval kanallarga obuna bo'ling.",
+                reply_markup=await subscription_buttons()
+            )
+            await call.answer()
+            return
+
+    try:
+        amount = int(call.data.split(":")[1])
+    except ValueError:
+        await call.answer("Xato buyurtma.", show_alert=True)
         return
 
-    amount = int(message.text.split()[1])
-    uid = message.from_user.id
-
-    if await balance(uid) < amount:
-        await message.answer(
-            f"❌ Stars yetarli emas!\n"
-            f"Balans: {await balance(uid)} Stars"
-        )
+    if amount not in GIFT_PRICES:
+        await call.answer("Bunday gift mavjud emas.", show_alert=True)
         return
 
+    # Balansni tekshirish va Starsni bir tranzaksiyada ayirish
     async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("BEGIN IMMEDIATE")
+
+        async with db.execute(
+            "SELECT stars FROM users WHERE user_id=?",
+            (uid,)
+        ) as cur:
+            row = await cur.fetchone()
+
+        if not row:
+            await db.rollback()
+            await call.answer("Hisob topilmadi.", show_alert=True)
+            return
+
+        if row[0] < amount:
+            await db.rollback()
+            await call.answer(
+                f"❌ Stars yetarli emas! Sizda {row[0]} Stars bor.",
+                show_alert=True
+            )
+            return
+
+        # Buyurtma berilishi bilan balansdan ayiriladi
+        await db.execute(
+            "UPDATE users SET stars=stars-? WHERE user_id=?",
+            (amount, uid)
+        )
+
         cur = await db.execute("""
-        INSERT INTO gifts(user_id,stars,created)
-        VALUES(?,?,?)
-        """, (uid, amount, datetime.now().isoformat()))
+        INSERT INTO gifts(user_id,stars,status,created)
+        VALUES(?,?,'pending',?)
+        """, (
+            uid, amount, datetime.now().isoformat()
+        ))
 
         gid = cur.lastrowid
+
+        await db.execute("""
+        INSERT INTO transactions(user_id,amount,reason,created)
+        VALUES(?,?,?,?)
+        """, (
+            uid, -amount, f"{amount} Stars Gift buyurtmasi",
+            datetime.now().isoformat()
+        ))
+
         await db.commit()
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="✅ Tasdiqlash",
-            callback_data=f"gift_yes:{gid}"
-        ),
-        InlineKeyboardButton(
-            text="❌ Rad etish",
-            callback_data=f"gift_no:{gid}"
-        )
-    ]])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Tasdiqlash",
+                    callback_data=f"gift_yes:{gid}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Rad etish",
+                    callback_data=f"gift_no:{gid}"
+                )
+            ]
+        ]
+    )
+
+    admin_text = (
+        "🎁 <b>YANGI GIFT BUYURTMASI</b>\n\n"
+        f"📦 Buyurtma: #{gid}\n"
+        f"👤 Ism: {call.from_user.first_name}\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"⭐ Gift: {amount} Stars\n"
+        f"💰 Qolgan balans: {await get_balance(uid)} Stars"
+    )
 
     for admin in (ADMIN_ID_1, ADMIN_ID_2):
         try:
             await bot.send_message(
                 admin,
-                f"🎁 Gift so'rovi\n"
-                f"ID: {gid}\n"
-                f"User: {uid}\n"
-                f"Stars: {amount}",
+                admin_text,
                 reply_markup=kb
             )
         except Exception:
-            pass
+            logging.exception("Adminga gift xabari yuborilmadi")
 
-    await message.answer("✅ Gift so'rovingiz adminga yuborildi.")
+    await call.message.answer(
+        "✅ <b>BUYURTMA QABUL QILINDI!</b>\n\n"
+        f"🎁 Gift: {amount} Stars\n"
+        f"⭐ Hisobingizdan: -{amount} Stars\n"
+        f"💰 Qolgan balans: {await get_balance(uid)} Stars\n\n"
+        "Admin tasdiqlashini kuting."
+    )
 
+    await call.answer("Buyurtma yaratildi!")
+
+
+# =========================================
+# ADMIN: GIFT TASDIQLASH
+# =========================================
 
 @dp.callback_query(F.data.startswith("gift_yes:"))
 async def gift_approve(call: CallbackQuery):
@@ -831,55 +919,34 @@ async def gift_approve(call: CallbackQuery):
 
         if not row or row[2] != "pending":
             await db.rollback()
-            await call.answer("So'rov allaqachon ko'rib chiqilgan.")
+            await call.answer("Bu buyurtma allaqachon ko'rib chiqilgan.")
             return
 
         uid, amount, _ = row
-
-        async with db.execute(
-            "SELECT stars FROM users WHERE user_id=?",
-            (uid,)
-        ) as cur:
-            bal = await cur.fetchone()
-
-        if not bal or bal[0] < amount:
-            await db.execute(
-                "UPDATE gifts SET status='rejected' WHERE id=?",
-                (gid,)
-            )
-            await db.commit()
-            await call.message.edit_text("❌ Balans yetarli emas.")
-            await bot.send_message(uid, "❌ Gift rad etildi: balans yetarli emas.")
-            return
-
-        await db.execute(
-            "UPDATE users SET stars=stars-? WHERE user_id=?",
-            (amount, uid)
-        )
 
         await db.execute(
             "UPDATE gifts SET status='approved' WHERE id=?",
             (gid,)
         )
 
-        await db.execute("""
-        INSERT INTO transactions(user_id,amount,reason,created)
-        VALUES(?,?,?,?)
-        """, (
-            uid, -amount, "Gift yechish",
-            datetime.now().isoformat()
-        ))
-
         await db.commit()
 
-    await call.message.edit_text("✅ Gift tasdiqlandi.")
-
-    await bot.send_message(
-        uid,
-        f"🎁 Gift tasdiqlandi!\n⭐ -{amount} Stars"
+    await call.message.edit_text(
+        f"✅ #{gid} buyurtma tasdiqlandi.\n"
+        f"User: {uid}\nGift: {amount} Stars"
     )
 
-    await call.answer("Bajarildi!")
+    try:
+        await bot.send_message(
+            uid,
+            "🎉 <b>GIFT BUYURTMANGIZ TASDIQLANDI!</b>\n\n"
+            f"🎁 Gift: {amount} Stars\n"
+            "Admin buyurtmangizni tasdiqladi."
+        )
+    except Exception:
+        pass
+
+    await call.answer("Tasdiqlandi!")
 
 
 @dp.callback_query(F.data.startswith("gift_no:"))
@@ -891,72 +958,262 @@ async def gift_reject(call: CallbackQuery):
     gid = int(call.data.split(":")[1])
 
     async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("BEGIN IMMEDIATE")
+
         async with db.execute(
-            "SELECT user_id,status FROM gifts WHERE id=?",
+            "SELECT user_id,stars,status FROM gifts WHERE id=?",
             (gid,)
         ) as cur:
             row = await cur.fetchone()
 
-        if not row or row[1] != "pending":
-            await call.answer("So'rov ko'rib chiqilgan.")
+        if not row or row[2] != "pending":
+            await db.rollback()
+            await call.answer("Bu buyurtma allaqachon ko'rib chiqilgan.")
             return
+
+        uid, amount, _ = row
+
+        # Rad etilganda pulni qaytarish
+        await db.execute(
+            "UPDATE users SET stars=stars+? WHERE user_id=?",
+            (amount, uid)
+        )
 
         await db.execute(
             "UPDATE gifts SET status='rejected' WHERE id=?",
             (gid,)
         )
+
+        await db.execute("""
+        INSERT INTO transactions(user_id,amount,reason,created)
+        VALUES(?,?,?,?)
+        """, (
+            uid, amount, "Rad etilgan gift uchun qaytarildi",
+            datetime.now().isoformat()
+        ))
+
         await db.commit()
 
-    await call.message.edit_text("❌ Gift rad etildi.")
-    await bot.send_message(row[0], "❌ Gift so'rovingiz rad etildi.")
-    await call.answer("Rad etildi!")
+    await call.message.edit_text(
+        f"❌ #{gid} buyurtma rad etildi.\n"
+        f"⭐ {amount} Stars qaytarildi."
+    )
+
+    try:
+        await bot.send_message(
+            uid,
+            "❌ Gift buyurtmangiz rad etildi.\n\n"
+            f"⭐ {amount} Stars hisobingizga qaytarildi."
+        )
+    except Exception:
+        pass
+
+    await call.answer("Rad etildi. Stars qaytarildi!")
 
 
-# ==================================================
-# BUYURTMALAR
-# ==================================================
+# =========================================
+# BUYURTMALAR TARIXI
+# =========================================
 
 @dp.message(F.text == "📦 Buyurtmalar")
-async def orders(message: Message):
-    if not await allowed(message):
+async def my_orders(message: Message):
+    if not await check_user(message):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("""
         SELECT id,stars,status,created
         FROM gifts WHERE user_id=?
-        ORDER BY id DESC LIMIT 20
+        ORDER BY id DESC LIMIT 30
         """, (message.from_user.id,)) as cur:
             rows = await cur.fetchall()
 
     if not rows:
-        await message.answer("📦 Buyurtmalar mavjud emas.")
+        await message.answer("📦 Sizda buyurtmalar mavjud emas.")
         return
 
-    text = "📦 <b>BUYURTMALAR</b>\n\n"
+    text = "📦 <b>BUYURTMALARIM</b>\n\n"
 
-    for gid, stars, status, created in rows:
-        text += f"#{gid} — {stars} Stars\n{status}\n{created}\n\n"
+    statuses = {
+        "pending": "⏳ Kutilmoqda",
+        "approved": "✅ Tasdiqlangan",
+        "rejected": "❌ Rad etilgan"
+    }
+
+    for gid, amount, status, created in rows:
+        text += (
+            f"🆔 Buyurtma: #{gid}\n"
+            f"🎁 Gift: {amount} Stars\n"
+            f"Holati: {statuses.get(status, status)}\n"
+            f"📅 {created[:16]}\n\n"
+        )
 
     await message.answer(text)
 
 
-# ==================================================
-# HISOB TO'LDIRISH
-# ==================================================
+# =========================================
+# ADMIN: GIFT BUYURTMALARI
+# =========================================
+
+@dp.message(F.text == "🎁 Gift buyurtmalari")
+async def admin_gifts(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("""
+        SELECT id,user_id,stars,created
+        FROM gifts WHERE status='pending'
+        ORDER BY id DESC
+        """) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        await message.answer("🎁 Kutilayotgan buyurtmalar yo'q.")
+        return
+
+    for gid, uid, amount, created in rows:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="✅ Tasdiqlash",
+                callback_data=f"gift_yes:{gid}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Rad etish",
+                callback_data=f"gift_no:{gid}"
+            )
+        ]])
+
+        await message.answer(
+            f"🎁 Buyurtma #{gid}\n"
+            f"👤 User: {uid}\n"
+            f"⭐ Miqdor: {amount}\n"
+            f"📅 {created[:16]}",
+            reply_markup=kb
+        )
+
+
+# =========================================
+# FOYDALANUVCHI: PROMOKOD
+# =========================================
+
+@dp.message(F.text == "🎟 Promokod")
+async def promo_start(message: Message, state: FSMContext):
+    if not await check_user(message):
+        return
+
+    await message.answer("🎟 Promokodni yuboring:")
+    await state.set_state(Form.promo_use)
+
+
+@dp.message(Form.promo_use)
+async def promo_use(message: Message, state: FSMContext):
+    if not await check_user(message):
+        return
+
+    code = message.text.strip().upper()
+    uid = message.from_user.id
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("BEGIN IMMEDIATE")
+
+        async with db.execute(
+            "SELECT stars,limit_count,used FROM promos WHERE code=?",
+            (code,)
+        ) as cur:
+            row = await cur.fetchone()
+
+        if not row:
+            await db.rollback()
+            await state.clear()
+            await message.answer("❌ Promokod topilmadi.")
+            return
+
+        async with db.execute(
+            "SELECT 1 FROM promo_users WHERE user_id=? AND code=?",
+            (uid, code)
+        ) as cur:
+            used = await cur.fetchone()
+
+        if used:
+            await db.rollback()
+            await state.clear()
+            await message.answer("❌ Bu promokoddan oldin foydalangansiz.")
+            return
+
+        stars, limit, count = row
+
+        if limit > 0 and count >= limit:
+            await db.rollback()
+            await state.clear()
+            await message.answer("❌ Promokod tugagan.")
+            return
+
+        await db.execute(
+            "INSERT INTO promo_users(user_id,code) VALUES(?,?)",
+            (uid, code)
+        )
+
+        await db.execute(
+            "UPDATE promos SET used=used+1 WHERE code=?",
+            (code,)
+        )
+
+        await db.execute(
+            "UPDATE users SET stars=stars+? WHERE user_id=?",
+            (stars, uid)
+        )
+
+        await db.execute("""
+        INSERT INTO transactions(user_id,amount,reason,created)
+        VALUES(?,?,?,?)
+        """, (
+            uid, stars, "Promokod " + code,
+            datetime.now().isoformat()
+        ))
+
+        await db.commit()
+
+    await state.clear()
+    await message.answer(f"🎉 Promokod qabul qilindi!\n⭐ +{stars} Stars")
+
+
+# =========================================
+# FOYDALANUVCHI: SLOT
+# =========================================
+
+@dp.message(F.text == "🎰 777 Slot")
+async def slot(message: Message):
+    if not await check_user(message):
+        return
+
+    dice = await message.answer_dice(emoji="🎰")
+
+    if dice.dice.value == 64:
+        await change_stars(
+            message.from_user.id, 5, "Slot jackpot"
+        )
+        await message.answer("🎉 JACKPOT! +5 Stars")
+    else:
+        await message.answer("🎰 Omad kelmadi. Yana urinib ko'ring!")
+
+
+# =========================================
+# FOYDALANUVCHI: HISOB TO'LDIRISH
+# =========================================
 
 @dp.message(F.text == "💰 Hisob to'ldirish")
 async def topup_start(message: Message, state: FSMContext):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
-    await message.answer("Qancha Stars olmoqchisiz? Miqdorni yuboring:")
+    await message.answer("Qancha Stars kerak? Miqdorni yuboring:")
     await state.set_state(Form.topup)
 
 
 @dp.message(Form.topup)
 async def topup_finish(message: Message, state: FSMContext):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
     try:
@@ -964,7 +1221,7 @@ async def topup_finish(message: Message, state: FSMContext):
         if amount <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Musbat son kiriting.")
+        await message.answer("Musbat son yuboring.")
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -990,8 +1247,7 @@ async def topup_finish(message: Message, state: FSMContext):
         try:
             await bot.send_message(
                 admin,
-                f"💰 Hisob to'ldirish\n"
-                f"ID: {rid}\n"
+                f"💰 Hisob so'rovi #{rid}\n"
                 f"User: {message.from_user.id}\n"
                 f"Stars: {amount}",
                 reply_markup=kb
@@ -1000,11 +1256,11 @@ async def topup_finish(message: Message, state: FSMContext):
             pass
 
     await state.clear()
-    await message.answer("✅ So'rov yuborildi. Admin tasdiqlashini kuting.")
+    await message.answer("✅ So'rov adminga yuborildi.")
 
 
 @dp.callback_query(F.data.startswith("topup_yes:"))
-async def topup_approve(call: CallbackQuery):
+async def topup_yes(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Ruxsat yo'q!", show_alert=True)
         return
@@ -1048,12 +1304,17 @@ async def topup_approve(call: CallbackQuery):
         await db.commit()
 
     await call.message.edit_text("✅ Hisob to'ldirildi.")
-    await bot.send_message(uid, f"🎉 +{amount} Stars hisobingizga qo'shildi!")
-    await call.answer("Bajarildi!")
+
+    try:
+        await bot.send_message(uid, f"⭐ +{amount} Stars hisobingizga qo'shildi.")
+    except Exception:
+        pass
+
+    await call.answer("Tasdiqlandi!")
 
 
 @dp.callback_query(F.data.startswith("topup_no:"))
-async def topup_reject(call: CallbackQuery):
+async def topup_no(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Ruxsat yo'q!", show_alert=True)
         return
@@ -1078,122 +1339,22 @@ async def topup_reject(call: CallbackQuery):
         await db.commit()
 
     await call.message.edit_text("❌ So'rov rad etildi.")
-    await bot.send_message(row[0], "❌ Hisob to'ldirish rad etildi.")
+
+    try:
+        await bot.send_message(row[0], "❌ Hisob to'ldirish so'rovingiz rad etildi.")
+    except Exception:
+        pass
+
     await call.answer("Rad etildi!")
 
 
-# ==================================================
-# PROMOKOD FOYDALANISH
-# ==================================================
+# =========================================
+# FOYDALANUVCHI: QOLGAN MENYULAR
+# =========================================
 
-@dp.message(F.text == "🎟 Promokod")
-async def promo_start(message: Message, state: FSMContext):
-    if not await allowed(message):
-        return
-
-    await message.answer("🎟 Promokodni yuboring:")
-    await state.set_state(Form.promo_use)
-
-
-@dp.message(Form.promo_use)
-async def promo_use(message: Message, state: FSMContext):
-    if not await allowed(message):
-        return
-
-    code = message.text.strip().upper()
-    uid = message.from_user.id
-
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("BEGIN IMMEDIATE")
-
-        async with db.execute(
-            "SELECT stars,limit_count,used FROM promos WHERE code=?",
-            (code,)
-        ) as cur:
-            row = await cur.fetchone()
-
-        if not row:
-            await db.rollback()
-            await state.clear()
-            await message.answer("❌ Promokod topilmadi.")
-            return
-
-        async with db.execute(
-            "SELECT 1 FROM promo_users WHERE user_id=? AND code=?",
-            (uid, code)
-        ) as cur:
-            used = await cur.fetchone()
-
-        if used:
-            await db.rollback()
-            await state.clear()
-            await message.answer("❌ Bu promokoddan foydalangansiz.")
-            return
-
-        stars, limit, count = row
-
-        if limit > 0 and count >= limit:
-            await db.rollback()
-            await state.clear()
-            await message.answer("❌ Promokod tugagan.")
-            return
-
-        await db.execute(
-            "INSERT INTO promo_users VALUES(?,?)",
-            (uid, code)
-        )
-
-        await db.execute(
-            "UPDATE promos SET used=used+1 WHERE code=?",
-            (code,)
-        )
-
-        await db.execute(
-            "UPDATE users SET stars=stars+? WHERE user_id=?",
-            (stars, uid)
-        )
-
-        await db.execute("""
-        INSERT INTO transactions(user_id,amount,reason,created)
-        VALUES(?,?,?,?)
-        """, (
-            uid, stars, "Promokod " + code,
-            datetime.now().isoformat()
-        ))
-
-        await db.commit()
-
-    await state.clear()
-    await message.answer(f"🎉 Promokod qabul qilindi!\n⭐ +{stars} Stars")
-
-
-# ==================================================
-# SLOT
-# ==================================================
-
-@dp.message(F.text == "🎰 Open")
-async def slot(message: Message):
-    if not await allowed(message):
-        return
-
-    dice = await message.answer_dice(emoji="🎰")
-
-    if dice.dice.value == 64:
-        await change_stars(
-            message.from_user.id, 5, "777 slot yutug'i"
-        )
-        await message.answer("🎉 JACKPOT! +5 Stars")
-    else:
-        await message.answer("🎰 Omad kelmadi. Yana urinib ko'ring!")
-
-
-# ==================================================
-# FOYDALANUVCHI QOLGAN MENYULARI
-# ==================================================
-
-@dp.message(F.text == "📊 Son")
-async def user_stats(message: Message):
-    if not await allowed(message):
+@dp.message(F.text == "📊 Statistika")
+async def user_statistics(message: Message):
+    if not await check_user(message):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -1202,162 +1363,372 @@ async def user_stats(message: Message):
         ) as cur:
             count = (await cur.fetchone())[0]
 
-    await message.answer(f"📊 Bot foydalanuvchilari: {count}")
+    await message.answer(
+        f"📊 Bot foydalanuvchilari: {count}"
+    )
 
 
-@dp.message(F.text == "☎️ Murojaat")
+@dp.message(F.text == "☎️ Yordam")
 async def support(message: Message):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
     await message.answer(
-        "☎️ Yordam uchun adminlarga murojaat qiling:\n\n"
-        f"Admin 1 ID: <code>{ADMIN_ID_1}</code>\n"
-        f"Admin 2 ID: <code>{ADMIN_ID_2}</code>"
+        "☎️ Yordam uchun adminlarga yozing.\n\n"
+        f"Admin ID 1: <code>{ADMIN_ID_1}</code>\n"
+        f"Admin ID 2: <code>{ADMIN_ID_2}</code>"
     )
 
 
 @dp.message(F.text == "📚 Qo'llanma")
 async def guide(message: Message):
-    if not await allowed(message):
+    if not await check_user(message):
         return
 
     await message.answer(
         "📚 <b>QO'LLANMA</b>\n\n"
         "⭐ Stars olish — referal orqali Stars yig'ish.\n"
-        "🎁 Gift yechish — gift so'rovi yuborish.\n"
+        "🎁 Gift yechish — 15 yoki 25 Stars gift buyurtma qilish.\n"
         "📦 Buyurtmalar — buyurtmalar tarixini ko'rish.\n"
-        "👤 Mening hisobim — balansni tekshirish.\n"
-        "🗣 Referal — havolangizni olish.\n"
-        "🎟 Promokod — kodni ishlatish."
+        "👤 Mening hisobim — hisobingizni ko'rish.\n"
+        "🎟 Promokod — promokod ishlatish.\n"
+        "🏆 TOP referal — eng faol taklif qiluvchilar."
     )
 
 
-@dp.message(F.text == "ℹ️ Ma'lumot")
-async def info(message: Message):
-    if not await allowed(message):
-        return
+# =========================================
+# ADMIN: FOYDALANUVCHILAR RO'YXATI
+# =========================================
 
-    await message.answer(
-        "⭐ STARS BOT\n\n"
-        "Referal, Stars va gift buyurtmalari tizimi."
-    )
+USERS_PER_PAGE = 10
 
 
-@dp.message(F.text == "🌐 Til")
-async def language(message: Message):
-    if not await allowed(message):
-        return
+async def users_keyboard(page=0):
+    offset = page * USERS_PER_PAGE
 
-    await message.answer("🌐 Hozirgi til: O'zbek tili.")
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("""
+        SELECT user_id,first_name,username
+        FROM users
+        ORDER BY user_id DESC
+        LIMIT ? OFFSET ?
+        """, (USERS_PER_PAGE, offset)) as cur:
+            rows = await cur.fetchall()
 
+        async with db.execute(
+            "SELECT COUNT(*) FROM users"
+        ) as cur:
+            total = (await cur.fetchone())[0]
 
-@dp.message(F.text == "⬅️ Orqaga")
-async def back(message: Message):
-    await message.answer(
-        "Asosiy menyu:",
-        reply_markup=user_menu()
-    )
+    buttons = []
 
+    for uid, name, username in rows:
+        label = name or username or f"User {uid}"
 
-# ==================================================
-# ADMIN: FOYDALANUVCHILAR
-# ==================================================
+        if username:
+            label = f"{label} (@{username})"
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"👤 {label[:45]}",
+                callback_data=f"user_profile:{uid}"
+            )
+        ])
+
+    nav = []
+
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️",
+                callback_data=f"users_page:{page-1}"
+            )
+        )
+
+    if offset + USERS_PER_PAGE < total:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"users_page:{page+1}"
+            )
+        )
+
+    if nav:
+        buttons.append(nav)
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons), total
+
 
 @dp.message(F.text == "👥 Foydalanuvchilar")
 async def admin_users(message: Message):
     if not is_admin(message.from_user.id):
         return
 
+    kb, total = await users_keyboard(0)
+
+    await message.answer(
+        f"👥 <b>FOYDALANUVCHILAR</b>\n\n"
+        f"Jami: {total} ta\n"
+        "Profilni ko'rish uchun ismni bosing:",
+        reply_markup=kb
+    )
+
+
+@dp.callback_query(F.data.startswith("users_page:"))
+async def users_page(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Ruxsat yo'q!", show_alert=True)
+        return
+
+    page = int(call.data.split(":")[1])
+    kb, total = await users_keyboard(page)
+
+    await call.message.edit_text(
+        f"👥 <b>FOYDALANUVCHILAR</b>\n\n"
+        f"Jami: {total} ta\n"
+        "Profilni ko'rish uchun ismni bosing:",
+        reply_markup=kb
+    )
+
+    await call.answer()
+
+
+# =========================================
+# ADMIN: ALOHIDA FOYDALANUVCHI PROFILI
+# =========================================
+
+async def show_user_profile(message_or_call, uid):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("""
-        SELECT user_id,username,stars,banned
-        FROM users ORDER BY user_id DESC LIMIT 30
-        """) as cur:
-            rows = await cur.fetchall()
+        SELECT user_id,first_name,username,stars,referrer,
+               banned,created
+        FROM users WHERE user_id=?
+        """, (uid,)) as cur:
+            user = await cur.fetchone()
 
-    text = "👥 <b>FOYDALANUVCHILAR</b>\n\n"
+        if not user:
+            return False
 
-    for uid, username, stars, banned in rows:
-        text += (
-            f"ID: {uid}\n"
-            f"Username: @{username or 'yoq'}\n"
-            f"Stars: {stars}\n"
-            f"Holati: {'Ban' if banned else 'Faol'}\n\n"
+        async with db.execute("""
+        SELECT COUNT(*) FROM referrals
+        WHERE referrer=? AND active=1
+        """, (uid,)) as cur:
+            active_refs = (await cur.fetchone())[0]
+
+        async with db.execute("""
+        SELECT COUNT(*) FROM referrals
+        WHERE referrer=?
+        """, (uid,)) as cur:
+            total_refs = (await cur.fetchone())[0]
+
+        async with db.execute("""
+        SELECT COUNT(*) FROM gifts
+        WHERE user_id=? AND status='pending'
+        """, (uid,)) as cur:
+            pending_gifts = (await cur.fetchone())[0]
+
+        async with db.execute("""
+        SELECT amount,reason,created
+        FROM transactions WHERE user_id=?
+        ORDER BY id DESC LIMIT 5
+        """, (uid,)) as cur:
+            transactions = await cur.fetchall()
+
+    uid, name, username, stars, referrer, banned, created = user
+
+    name = name or "Ism mavjud emas"
+    username_text = f"@{username}" if username else "Username mavjud emas"
+
+    text = (
+        "👤 <b>FOYDALANUVCHI PROFILI</b>\n\n"
+        f"👤 Ism: <a href='tg://user?id={uid}'>{name}</a>\n"
+        f"🔗 Username: {username_text}\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"⭐ Stars: <b>{stars}</b>\n"
+        f"👥 Faol referallar: {active_refs}\n"
+        f"🔗 Jami referallar: {total_refs}\n"
+        f"👤 Taklif qilgan ID: {referrer or 'Yo‘q'}\n"
+        f"🎁 Kutilayotgan buyurtmalar: {pending_gifts}\n"
+        f"🚫 Holati: {'Bloklangan' if banned else 'Faol'}\n"
+        f"📅 Ro'yxatdan o'tgan: {created or 'Noma’lum'}\n\n"
+        "<b>Oxirgi 5 ta tranzaksiya:</b>\n"
+    )
+
+    if transactions:
+        for amount, reason, date in transactions:
+            sign = "+" if amount > 0 else ""
+            text += f"{sign}{amount} ⭐ — {reason} ({date[:10]})\n"
+    else:
+        text += "Tranzaksiyalar mavjud emas.\n"
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⭐ Stars qo'shish",
+                    callback_data=f"quick_add:{uid}"
+                ),
+                InlineKeyboardButton(
+                    text="📉 Stars ayirish",
+                    callback_data=f"quick_remove:{uid}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Ban" if not banned else "✅ Unban",
+                    callback_data=f"quick_ban:{uid}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔙 Foydalanuvchilar",
+                    callback_data="users_page:0"
+                )
+            ]
+        ]
+    )
+
+    if isinstance(message_or_call, CallbackQuery):
+        await message_or_call.message.edit_text(
+            text,
+            reply_markup=kb
+        )
+    else:
+        await message_or_call.answer(
+            text,
+            reply_markup=kb
         )
 
-    await message.answer(text if rows else "Foydalanuvchilar yo'q.")
+    return True
 
 
-# ==================================================
-# ADMIN: STATISTIKA
-# ==================================================
+@dp.callback_query(F.data.startswith("user_profile:"))
+async def user_profile(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Ruxsat yo'q!", show_alert=True)
+        return
 
-@dp.message(F.text == "📊 Statistika")
-async def admin_stats(message: Message):
-    if not is_admin(message.from_user.id):
+    uid = int(call.data.split(":")[1])
+
+    result = await show_user_profile(call, uid)
+
+    if not result:
+        await call.answer("Foydalanuvchi topilmadi.")
+        return
+
+    await call.answer()
+
+
+# =========================================
+# ADMIN: PROFILDAN STARS QO'SHISH
+# =========================================
+
+@dp.callback_query(F.data.startswith("quick_add:"))
+async def quick_add(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Ruxsat yo'q!", show_alert=True)
+        return
+
+    uid = int(call.data.split(":")[1])
+
+    await state.update_data(target_uid=uid)
+    await state.set_state(Form.add_stars)
+
+    await call.message.answer(
+        f"{uid} foydalanuvchiga qancha Stars qo'shilsin?"
+    )
+
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("quick_remove:"))
+async def quick_remove(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Ruxsat yo'q!", show_alert=True)
+        return
+
+    uid = int(call.data.split(":")[1])
+
+    await state.update_data(target_uid=uid)
+    await state.set_state(Form.remove_stars)
+
+    await call.message.answer(
+        f"{uid} foydalanuvchidan qancha Stars ayrilsin?"
+    )
+
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("quick_ban:"))
+async def quick_ban(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Ruxsat yo'q!", show_alert=True)
+        return
+
+    uid = int(call.data.split(":")[1])
+
+    if is_admin(uid):
+        await call.answer("Adminni bloklab bo'lmaydi.", show_alert=True)
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
-            "SELECT COUNT(*) FROM users"
+            "SELECT banned FROM users WHERE user_id=?",
+            (uid,)
         ) as cur:
-            users = (await cur.fetchone())[0]
+            row = await cur.fetchone()
 
-        async with db.execute(
-            "SELECT COALESCE(SUM(stars),0) FROM users"
-        ) as cur:
-            stars = (await cur.fetchone())[0]
+        if not row:
+            await call.answer("Foydalanuvchi topilmadi.")
+            return
 
-        async with db.execute(
-            "SELECT COUNT(*) FROM referrals WHERE active=1"
-        ) as cur:
-            refs = (await cur.fetchone())[0]
+        new_status = 0 if row[0] else 1
 
-        async with db.execute(
-            "SELECT COUNT(*) FROM gifts WHERE status='pending'"
-        ) as cur:
-            gifts = (await cur.fetchone())[0]
+        await db.execute(
+            "UPDATE users SET banned=? WHERE user_id=?",
+            (new_status, uid)
+        )
+        await db.commit()
 
-    await message.answer(
-        "📊 <b>STATISTIKA</b>\n\n"
-        f"👥 Foydalanuvchilar: {users}\n"
-        f"⭐ Jami Stars: {stars}\n"
-        f"🔗 Faol referallar: {refs}\n"
-        f"🎁 Kutilayotgan gift: {gifts}"
-    )
+    await show_user_profile(call, uid)
+    await call.answer("Holat o'zgartirildi.")
 
 
-# ==================================================
+# =========================================
 # ADMIN: QIDIRISH
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "🔎 Qidirish")
+@dp.message(F.text == "🔎 Foydalanuvchi qidirish")
 async def search_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    await message.answer("Foydalanuvchi ID sini yuboring:")
-    await state.set_state(Form.search)
+    await message.answer(
+        "Foydalanuvchi ID yoki username yuboring:"
+    )
+    await state.set_state(Form.search_user)
 
 
-@dp.message(Form.search)
+@dp.message(Form.search_user)
 async def search_finish(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    try:
-        uid = int(message.text)
-    except ValueError:
-        await message.answer("ID raqam bo'lishi kerak.")
-        return
+    query = message.text.strip().replace("@", "")
 
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("""
-        SELECT username,stars,banned,created
-        FROM users WHERE user_id=?
-        """, (uid,)) as cur:
-            row = await cur.fetchone()
+        if query.isdigit():
+            async with db.execute(
+                "SELECT user_id FROM users WHERE user_id=?",
+                (int(query),)
+            ) as cur:
+                row = await cur.fetchone()
+        else:
+            async with db.execute(
+                "SELECT user_id FROM users WHERE username=?",
+                (query,)
+            ) as cur:
+                row = await cur.fetchone()
 
     await state.clear()
 
@@ -1365,148 +1736,124 @@ async def search_finish(message: Message, state: FSMContext):
         await message.answer("❌ Foydalanuvchi topilmadi.")
         return
 
-    await message.answer(
-        f"👤 @{row[0] or 'yoq'}\n"
-        f"🆔 {uid}\n"
-        f"⭐ {row[1]}\n"
-        f"🚫 Ban: {row[2]}\n"
-        f"📅 {row[3]}"
-    )
+    await show_user_profile(message, row[0])
 
 
-# ==================================================
-# ADMIN: REFERALLAR
-# ==================================================
-
-@dp.message(F.text == "🔗 Referallar")
-async def admin_refs(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("""
-        SELECT referrer,invited,reward,active
-        FROM referrals ORDER BY id DESC LIMIT 30
-        """) as cur:
-            rows = await cur.fetchall()
-
-    text = "🔗 <b>REFERALLAR</b>\n\n"
-
-    for ref, invited, reward, active in rows:
-        text += (
-            f"Taklif qiluvchi: {ref}\n"
-            f"Taklif qilingan: {invited}\n"
-            f"Mukofot: {reward} Stars\n"
-            f"Holati: {'Faol' if active else 'Bekor'}\n\n"
-        )
-
-    await message.answer(text if rows else "Referallar mavjud emas.")
-
-
-# ==================================================
+# =========================================
 # ADMIN: STARS QO'SHISH
-# ==================================================
+# =========================================
 
-@dp.message(F.text.in_([
-    "💰 Pul qo'shish",
-    "⭐ Stars qo'shish"
-]))
-async def add_start(message: Message, state: FSMContext):
+@dp.message(F.text == "⭐ Stars qo'shish")
+async def add_stars_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    await message.answer(
-        "ID va miqdorni yuboring:\n"
-        "<code>123456789 50</code>"
-    )
-    await state.set_state(Form.stars_add)
+    await message.answer("ID va Stars miqdorini yuboring:\n123456789 50")
+    await state.set_state(Form.add_stars)
 
 
-@dp.message(Form.stars_add)
-async def add_finish(message: Message, state: FSMContext):
+@dp.message(Form.add_stars)
+async def add_stars_finish(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
+
+    data = await state.get_data()
 
     try:
-        uid, amount = map(int, message.text.split())
+        if "target_uid" in data:
+            uid = int(data["target_uid"])
+            amount = int(message.text)
+        else:
+            uid, amount = map(int, message.text.split())
+
         if amount <= 0:
             raise ValueError
+
     except ValueError:
-        await message.answer("Format: ID MIQDOR")
+        await message.answer("Noto'g'ri format. ID MIQDOR yoki faqat miqdor.")
         return
 
     result = await change_stars(uid, amount, "Admin Stars qo'shdi")
+
     await state.clear()
 
-    if result:
-        await message.answer("✅ Stars qo'shildi.")
-        try:
-            await bot.send_message(uid, f"⭐ +{amount} Stars qo'shildi!")
-        except Exception:
-            pass
-    else:
+    if not result:
         await message.answer("❌ Foydalanuvchi topilmadi.")
-
-
-# ==================================================
-# ADMIN: STARS AYIRISH
-# ==================================================
-
-@dp.message(F.text.in_([
-    "💸 Pul ayirish",
-    "📉 Stars ayirish"
-]))
-async def remove_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
         return
 
-    await message.answer(
-        "ID va miqdorni yuboring:\n"
-        "<code>123456789 10</code>"
-    )
-    await state.set_state(Form.stars_remove)
-
-
-@dp.message(Form.stars_remove)
-async def remove_finish(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
+    await message.answer(f"✅ {amount} Stars qo'shildi.")
 
     try:
-        uid, amount = map(int, message.text.split())
+        await bot.send_message(uid, f"⭐ Sizga +{amount} Stars qo'shildi.")
+    except Exception:
+        pass
+
+
+# =========================================
+# ADMIN: STARS AYIRISH
+# =========================================
+
+@dp.message(F.text == "📉 Stars ayirish")
+async def remove_stars_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("ID va miqdorni yuboring:\n123456789 10")
+    await state.set_state(Form.remove_stars)
+
+
+@dp.message(Form.remove_stars)
+async def remove_stars_finish(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+
+    try:
+        if "target_uid" in data:
+            uid = int(data["target_uid"])
+            amount = int(message.text)
+        else:
+            uid, amount = map(int, message.text.split())
+
         if amount <= 0:
             raise ValueError
+
     except ValueError:
-        await message.answer("Format: ID MIQDOR")
+        await message.answer("Noto'g'ri format. ID MIQDOR yoki faqat miqdor.")
         return
 
     result = await change_stars(uid, -amount, "Admin Stars ayirdi")
+
     await state.clear()
 
-    await message.answer(
-        "✅ Stars ayirildi."
-        if result
-        else "❌ Foydalanuvchi topilmadi yoki Stars yetarli emas."
-    )
+    if result:
+        await message.answer("✅ Stars ayirildi.")
+        try:
+            await bot.send_message(uid, f"⭐ Sizdan -{amount} Stars ayirildi.")
+        except Exception:
+            pass
+    else:
+        await message.answer("❌ Balans yetarli emas yoki foydalanuvchi topilmadi.")
 
 
-# ==================================================
+# =========================================
 # ADMIN: BAN / UNBAN
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "🚫 Ban / Unban qilish")
+@dp.message(F.text == "🚫 Ban / Unban")
 async def ban_help(message: Message):
     if not is_admin(message.from_user.id):
         return
 
     await message.answer(
-        "🚫 Bloklash: <code>/ban ID</code>\n"
-        "✅ Blokdan chiqarish: <code>/unban ID</code>"
+        "🚫 Ban: <code>/ban ID</code>\n"
+        "✅ Unban: <code>/unban ID</code>"
     )
 
 
 @dp.message(Command("ban"))
-async def ban(message: Message):
+async def ban_command(message: Message):
     if not is_admin(message.from_user.id):
         return
 
@@ -1533,7 +1880,7 @@ async def ban(message: Message):
 
 
 @dp.message(Command("unban"))
-async def unban(message: Message):
+async def unban_command(message: Message):
     if not is_admin(message.from_user.id):
         return
 
@@ -1556,25 +1903,154 @@ async def unban(message: Message):
     )
 
 
-# ==================================================
-# ADMIN: KANAL QO'SHISH
-# ==================================================
+# =========================================
+# ADMIN: STATISTIKA
+# =========================================
 
-@dp.message(F.text == "➕ Kanal qo'shish")
-async def channel_add_start(message: Message, state: FSMContext):
+@dp.message(F.text == "📊 Statistika")
+async def admin_statistics(message: Message):
+    if not is_admin(message.from_user.id):
+        # Oddiy foydalanuvchi statistikasi
+        if not await check_user(message):
+            return
+
+        async with aiosqlite.connect(DB_NAME) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM users"
+            ) as cur:
+                total = (await cur.fetchone())[0]
+
+        await message.answer(f"📊 Bot foydalanuvchilari: {total}")
+        return
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM users"
+        ) as cur:
+            users = (await cur.fetchone())[0]
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM users WHERE banned=1"
+        ) as cur:
+            banned = (await cur.fetchone())[0]
+
+        async with db.execute(
+            "SELECT COALESCE(SUM(stars),0) FROM users"
+        ) as cur:
+            stars = (await cur.fetchone())[0]
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM referrals WHERE active=1"
+        ) as cur:
+            refs = (await cur.fetchone())[0]
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM gifts WHERE status='pending'"
+        ) as cur:
+            gifts = (await cur.fetchone())[0]
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM topups WHERE status='pending'"
+        ) as cur:
+            topups = (await cur.fetchone())[0]
+
+    await message.answer(
+        "📊 <b>BOT STATISTIKASI</b>\n\n"
+        f"👥 Jami foydalanuvchilar: {users}\n"
+        f"🚫 Bloklanganlar: {banned}\n"
+        f"⭐ Jami Stars: {stars}\n"
+        f"🔗 Faol referallar: {refs}\n"
+        f"🎁 Kutilayotgan gift: {gifts}\n"
+        f"💰 Kutilayotgan hisob so'rovlari: {topups}"
+    )
+
+
+# =========================================
+# ADMIN: REFERALLAR
+# =========================================
+
+@dp.message(F.text == "🔗 Referallar")
+async def admin_referrals(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("""
+        SELECT referrer,invited,reward,active
+        FROM referrals ORDER BY id DESC LIMIT 30
+        """) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        await message.answer("Referallar mavjud emas.")
+        return
+
+    text = "🔗 <b>OXIRGI REFERALLAR</b>\n\n"
+
+    for ref, invited, reward, active in rows:
+        text += (
+            f"👤 Taklif qiluvchi: {ref}\n"
+            f"👥 Taklif qilingan: {invited}\n"
+            f"⭐ Mukofot: {reward}\n"
+            f"Holati: {'Faol' if active else 'Bekor'}\n\n"
+        )
+
+    await message.answer(text)
+
+
+# =========================================
+# ADMIN: REFERAL SOZLAMASI
+# =========================================
+
+@dp.message(F.text == "⚙️ Referal sozlamasi")
+async def referral_settings(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
     await message.answer(
-        "Kanal username yuboring.\n"
-        "Misol: <code>@kanal_nomi</code>\n"
-        "Bot kanal administratori bo'lishi kerak."
+        f"Joriy referal mukofoti: {await get_setting('referral_reward')} Stars\n\n"
+        "Yangi Stars miqdorini yuboring:"
     )
-    await state.set_state(Form.channel_add)
+
+    await state.set_state(Form.referral_reward)
 
 
-@dp.message(Form.channel_add)
-async def channel_add_finish(message: Message, state: FSMContext):
+@dp.message(Form.referral_reward)
+async def referral_settings_finish(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        amount = int(message.text)
+        if amount < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("0 yoki undan katta son yuboring.")
+        return
+
+    await set_setting("referral_reward", amount)
+    await state.clear()
+
+    await message.answer(
+        f"✅ Har bir yangi referal uchun {amount} Stars belgilanadi."
+    )
+
+
+# =========================================
+# ADMIN: KANAL QO'SHISH
+# =========================================
+
+@dp.message(F.text == "➕ Kanal qo'shish")
+async def add_channel_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("Kanal username yuboring. Masalan: @kanal")
+    await state.set_state(Form.add_channel)
+
+
+@dp.message(Form.add_channel)
+async def add_channel_finish(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
@@ -1594,7 +2070,7 @@ async def channel_add_finish(message: Message, state: FSMContext):
             return
 
     except Exception:
-        await message.answer("Kanal topilmadi yoki bot admin emas.")
+        await message.answer("Kanal topilmadi yoki bot administrator emas.")
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -1615,21 +2091,21 @@ async def channel_add_finish(message: Message, state: FSMContext):
     )
 
 
-# ==================================================
+# =========================================
 # ADMIN: KANAL O'CHIRISH
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "🗑 Kanalni o'chirish")
-async def channel_remove_start(message: Message, state: FSMContext):
+@dp.message(F.text == "➖ Kanal o'chirish")
+async def remove_channel_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    await message.answer("O'chiriladigan kanalni yuboring:")
-    await state.set_state(Form.channel_remove)
+    await message.answer("O'chiriladigan kanal username yuboring:")
+    await state.set_state(Form.remove_channel)
 
 
-@dp.message(Form.channel_remove)
-async def channel_remove_finish(message: Message, state: FSMContext):
+@dp.message(Form.remove_channel)
+async def remove_channel_finish(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
@@ -1648,67 +2124,34 @@ async def channel_remove_finish(message: Message, state: FSMContext):
     )
 
 
-# ==================================================
+# =========================================
 # ADMIN: KANALLAR RO'YXATI
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "📡 Kanallar ro'yxati")
+@dp.message(F.text == "📡 Kanallar")
 async def channel_list(message: Message):
     if not is_admin(message.from_user.id):
         return
 
-    rows = await channels()
+    rows = await get_channels()
 
-    text = "📡 <b>KANALLAR</b>\n\n"
+    if not rows:
+        await message.answer("Kanallar mavjud emas.")
+        return
+
+    text = "📡 <b>KANALLAR RO'YXATI</b>\n\n"
 
     for i, (channel,) in enumerate(rows, 1):
         text += f"{i}. {channel}\n"
 
-    await message.answer(text if rows else "Kanallar mavjud emas.")
+    await message.answer(text)
 
 
-# ==================================================
-# ADMIN: REFERAL SOZLAMASI
-# ==================================================
-
-@dp.message(F.text == "⚙️ Referal sozlamasi")
-async def reward_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    await message.answer(
-        f"Hozirgi mukofot: {await setting('referral_reward')} Stars\n\n"
-        "Yangi miqdorni yuboring:"
-    )
-    await state.set_state(Form.reward)
-
-
-@dp.message(Form.reward)
-async def reward_finish(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    try:
-        amount = int(message.text)
-        if amount < 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("0 yoki undan katta son yuboring.")
-        return
-
-    await set_setting("referral_reward", amount)
-    await state.clear()
-
-    await message.answer(
-        f"✅ Referal mukofoti {amount} Stars qilindi."
-    )
-
-
-# ==================================================
+# =========================================
 # ADMIN: PROMOKOD YARATISH
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "🎟 Promokod yaratish")
+@dp.message(F.text == "🎟 Promo yaratish")
 async def promo_create_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1717,8 +2160,9 @@ async def promo_create_start(message: Message, state: FSMContext):
         "Format:\n"
         "<code>KOD STARS LIMIT</code>\n\n"
         "Misol: <code>WELCOME 20 100</code>\n"
-        "0 = cheksiz"
+        "LIMIT = 0 bo'lsa cheksiz."
     )
+
     await state.set_state(Form.promo_create)
 
 
@@ -1740,28 +2184,28 @@ async def promo_create_finish(message: Message, state: FSMContext):
 
     async with aiosqlite.connect(DB_NAME) as db:
         try:
-            await db.execute(
-                "INSERT INTO promos(code,stars,limit_count) VALUES(?,?,?)",
-                (code, stars, limit)
-            )
+            await db.execute("""
+            INSERT INTO promos(code,stars,limit_count)
+            VALUES(?,?,?)
+            """, (code, stars, limit))
             await db.commit()
         except aiosqlite.IntegrityError:
-            await message.answer("Promokod mavjud.")
+            await message.answer("Bu promokod mavjud.")
             return
 
     await state.clear()
 
     await message.answer(
         f"✅ Promokod yaratildi!\n"
-        f"Kod: <code>{code}</code>\n"
+        f"Kod: {code}\n"
         f"Stars: {stars}\n"
         f"Limit: {limit or 'Cheksiz'}"
     )
 
 
-# ==================================================
+# =========================================
 # ADMIN: PROMOKODLAR
-# ==================================================
+# =========================================
 
 @dp.message(F.text == "📋 Promokodlar")
 async def promo_list(message: Message):
@@ -1770,27 +2214,31 @@ async def promo_list(message: Message):
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
-            "SELECT code,stars,limit_count,used FROM promos"
+            "SELECT code,stars,limit_count,used FROM promos ORDER BY code"
         ) as cur:
             rows = await cur.fetchall()
+
+    if not rows:
+        await message.answer("Promokodlar yo'q.")
+        return
 
     text = "🎟 <b>PROMOKODLAR</b>\n\n"
 
     for code, stars, limit, used in rows:
         text += (
             f"🔑 {code}\n"
-            f"⭐ {stars}\n"
+            f"⭐ {stars} Stars\n"
             f"Foydalanilgan: {used}/{limit or '∞'}\n\n"
         )
 
-    await message.answer(text if rows else "Promokodlar yo'q.")
+    await message.answer(text)
 
 
-# ==================================================
+# =========================================
 # ADMIN: REKLAMA
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "📢 Reklama tarqatish")
+@dp.message(F.text == "📢 Reklama")
 async def broadcast_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1829,167 +2277,59 @@ async def broadcast_finish(message: Message, state: FSMContext):
         await asyncio.sleep(0.05)
 
     await message.answer(
-        f"📢 Tarqatish tugadi!\n"
+        f"📢 Reklama tugadi!\n"
         f"✅ Yuborildi: {sent}\n"
         f"❌ Yuborilmadi: {failed}"
     )
 
 
-# ==================================================
-# ADMIN: KANALLARGA XABAR
-# ==================================================
+# =========================================
+# ADMIN: HISOB SO'ROVLARI
+# =========================================
 
-@dp.message(F.text == "📣 Kanallarga xabar")
-async def channel_broadcast_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    await message.answer("Kanallarga yuboriladigan xabarni yuboring:")
-    await state.set_state(Form.channel_message)
-
-
-@dp.message(Form.channel_message)
-async def channel_broadcast_finish(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    await state.clear()
-
-    sent = 0
-    failed = 0
-
-    for (channel,) in await channels():
-        try:
-            await bot.copy_message(
-                channel,
-                message.chat.id,
-                message.message_id
-            )
-            sent += 1
-        except Exception:
-            failed += 1
-
-    await message.answer(
-        f"📣 Yuborildi: {sent}\n"
-        f"❌ Xato: {failed}"
-    )
-
-
-# ==================================================
-# ADMIN: REJALASHTIRISH
-# ==================================================
-
-@dp.message(F.text == "⏰ Rejalashtirish")
-async def schedule_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    await message.answer("Necha daqiqadan keyin yuborilsin?")
-    await state.set_state(Form.schedule_time)
-
-
-@dp.message(Form.schedule_time)
-async def schedule_time(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    try:
-        minutes = int(message.text)
-        if minutes < 1:
-            raise ValueError
-    except ValueError:
-        await message.answer("Kamida 1 daqiqa kiriting.")
-        return
-
-    await state.update_data(minutes=minutes)
-    await message.answer("Yuboriladigan xabarni yuboring:")
-    await state.set_state(Form.schedule_text)
-
-
-@dp.message(Form.schedule_text)
-async def schedule_finish(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    data = await state.get_data()
-    minutes = data["minutes"]
-
-    chat_id = message.chat.id
-    message_id = message.message_id
-
-    await state.clear()
-
-    await message.answer(
-        f"✅ Xabar {minutes} daqiqadan keyin yuboriladi."
-    )
-
-    async def send_later():
-        await asyncio.sleep(minutes * 60)
-
-        async with aiosqlite.connect(DB_NAME) as db:
-            async with db.execute(
-                "SELECT user_id FROM users WHERE banned=0"
-            ) as cur:
-                users = await cur.fetchall()
-
-        for (uid,) in users:
-            try:
-                await bot.copy_message(uid, chat_id, message_id)
-            except Exception:
-                pass
-
-            await asyncio.sleep(0.05)
-
-    asyncio.create_task(send_later())
-
-
-# ==================================================
-# ADMIN: GIFT SO'ROVLARI
-# ==================================================
-
-@dp.message(F.text == "🎁 Gift so'rovlari")
-async def admin_gifts(message: Message):
+@dp.message(F.text == "💳 Hisob so'rovlari")
+async def admin_topups(message: Message):
     if not is_admin(message.from_user.id):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("""
-        SELECT id,user_id,stars FROM gifts
-        WHERE status='pending'
-        ORDER BY id
+        SELECT id,user_id,stars
+        FROM topups WHERE status='pending'
+        ORDER BY id DESC
         """) as cur:
             rows = await cur.fetchall()
 
     if not rows:
-        await message.answer("Gift so'rovlari yo'q.")
+        await message.answer("Kutilayotgan hisob so'rovlari yo'q.")
         return
 
-    for gid, uid, stars in rows:
+    for rid, uid, amount in rows:
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text="✅ Tasdiqlash",
-                callback_data=f"gift_yes:{gid}"
+                callback_data=f"topup_yes:{rid}"
             ),
             InlineKeyboardButton(
                 text="❌ Rad etish",
-                callback_data=f"gift_no:{gid}"
+                callback_data=f"topup_no:{rid}"
             )
         ]])
 
         await message.answer(
-            f"🎁 Gift #{gid}\n"
+            f"💳 So'rov #{rid}\n"
             f"User: {uid}\n"
-            f"Stars: {stars}",
+            f"Stars: {amount}",
             reply_markup=kb
         )
 
 
-# ==================================================
+# =========================================
 # ADMIN: BAZA ZAXIRASI
-# ==================================================
+# =========================================
 
-@dp.message(F.text == "💾 Baza zaxirasi")
-async def backup(message: Message):
+@dp.message(F.text == "💾 Baza")
+async def database_backup(message: Message):
     if not is_admin(message.from_user.id):
         return
 
@@ -2003,9 +2343,9 @@ async def backup(message: Message):
     )
 
 
-# ==================================================
+# =========================================
 # ADMIN: ASOSIY MENYU
-# ==================================================
+# =========================================
 
 @dp.message(F.text == "🏠 Asosiy menyu")
 async def admin_home(message: Message, state: FSMContext):
@@ -2015,7 +2355,7 @@ async def admin_home(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
-        "👑 Admin panel",
+        "👑 ADMIN PANEL",
         reply_markup=admin_menu()
     )
 
@@ -2026,46 +2366,42 @@ async def admin_command(message: Message):
         return
 
     await message.answer(
-        "👑 Admin panel",
+        "👑 ADMIN PANEL",
         reply_markup=admin_menu()
     )
 
 
-# ==================================================
-# ID
-# ==================================================
-
 @dp.message(Command("id"))
-async def get_id(message: Message):
+async def id_command(message: Message):
     await message.answer(
-        f"🆔 ID: <code>{message.from_user.id}</code>"
+        f"🆔 Sizning ID: <code>{message.from_user.id}</code>"
     )
 
 
-# ==================================================
-# NOMA'LUM XABAR
-# ==================================================
+# =========================================
+# BEGONA XABARLAR
+# =========================================
 
 @dp.message()
-async def unknown(message: Message):
+async def unknown_message(message: Message):
     if is_admin(message.from_user.id):
         await message.answer(
             "Admin paneldan bo'lim tanlang.",
             reply_markup=admin_menu()
         )
     else:
-        if not await allowed(message):
+        if not await check_user(message):
             return
 
         await message.answer(
-            "Menyudan bo'lim tanlang.",
+            "Menyudan kerakli bo'limni tanlang.",
             reply_markup=user_menu()
         )
 
 
-# ==================================================
+# =========================================
 # ISHGA TUSHIRISH
-# ==================================================
+# =========================================
 
 async def main():
     await db_init()
